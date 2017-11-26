@@ -9,6 +9,20 @@ def request_vote (term, candidateId, lastLogIndex, lastLogTerm, sock):
 	if sock.send(msg):
 		print 'Successfully sent vote request for %s' % (candidateId)
 
+# See if we want to vote for the candidate
+def handle_vote_request(msg, sock):
+	global votedFor
+	global currentTerm
+	global commitIndex
+	global my_id
+	vote = msg['term'] > currentTerm or (msg['term'] == currentTerm and msg['lastLogIndex'] > commitIndex) or (msg['term'] == currentTerm and msg['lastLogIndex'] == commitIndex and msg['lastLogTerm'] > log[commitIndex])
+	raw_msg = {'src':my_id, 'dst':msg['src'], leader:'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':vote}
+	if vote:
+		votedFor = msg['candidateID']
+	msg = json.dumps(raw_msg)
+	if sock.send(msg):
+		print 'Successfully voted'
+
 # Your ID number
 my_id = sys.argv[1]
 
@@ -53,8 +67,10 @@ while True:
 			if sock.send(json_reply):
 				print 'Successful %s for MID %s' % (msg['type'], msg['MID'])
 
-		if msg['type'] is 'appendrpc':
+		else if msg['type'] is 'appendrpc':
 			last = time.time()
+		else if msg['type'] is 'requestvoterpc':
+			handle_vote_request(msg, sock)
 		
 		# Handle noop messages. This may be removed from your final implementation
 		#elif msg['type'] == 'noop':
