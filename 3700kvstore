@@ -4,7 +4,7 @@ import sys, socket, select, time, json, random
 
 # Sends out RequestVote RPCs to declare self candidate
 def request_vote (term, candidateId, lastLogIndex, lastLogTerm, sock):
-	raw_msg = {'src':candidateID, 'dst':'FFFF', 'leader':'FFFF', 'type':'requestvoterpc', 'term':term, 'candidateID':candidateID, 'lastLogIndex':lastLogIndex, 'lastLogTerm':lastLogTerm}
+	raw_msg = {'src':candidateId, 'dst':'FFFF', 'leader':'FFFF', 'type':'requestvoterpc', 'term':term, 'candidateId':candidateId, 'lastLogIndex':lastLogIndex, 'lastLogTerm':lastLogTerm}
 	msg = json.dumps(raw_msg)
 	if sock.send(msg):
 		print 'Successfully sent vote request for %s' % (candidateId)
@@ -16,9 +16,9 @@ def handle_vote_request(msg, sock):
 	global commitIndex
 	global my_id
 	vote = msg['term'] > currentTerm or (msg['term'] == currentTerm and msg['lastLogIndex'] > commitIndex) or (msg['term'] == currentTerm and msg['lastLogIndex'] == commitIndex and msg['lastLogTerm'] > log[commitIndex])
-	raw_msg = {'src':my_id, 'dst':msg['src'], leader:'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':vote}
+	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':vote}
 	if vote:
-		votedFor = msg['candidateID']
+		votedFor = msg['candidateId']
 	msg = json.dumps(raw_msg)
 	if sock.send(msg):
 		print 'Successfully voted'
@@ -38,13 +38,19 @@ last = 0
 
 currentTerm = 0
 votedFor = None
-log = []
+log = [(-1, -1)]
 
 commitIndex = 0
 lastApplied = 0
 
 nextIndex = []
 matchIndex = []
+
+# leader ID
+leader_id = 'FFFF'
+
+#number of votes if you are a candidate
+votes = 0
 
 # represents the random timeout between 150 and 300 ms
 # stored in seconds
@@ -67,11 +73,16 @@ while True:
 			if sock.send(json_reply):
 				print 'Successful %s for MID %s' % (msg['type'], msg['MID'])
 
-		else if msg['type'] is 'appendrpc':
+		elif msg['type'] == 'appendrpc':
 			last = time.time()
-		else if msg['type'] is 'requestvoterpc':
+		elif msg['type'] == 'requestvoterpc':
+			print "handling vote request"
 			handle_vote_request(msg, sock)
-		
+		elif msg['type'] == 'replyvoterpc':
+			if msg['vote']:
+				votes += 1
+			else:
+				currentTerm = msg['term']
 		# Handle noop messages. This may be removed from your final implementation
 		#elif msg['type'] == 'noop':
 			#print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
@@ -79,6 +90,8 @@ while True:
 	clock = time.time()
 	#checks if received an Append RPC message in election timeout frame
 	if clock - last > election_timeout:
+		# vote for ourself
+		votes += 1
 		# if election timeout, declare yourself the leader
 		request_vote(currentTerm, my_id, commitIndex, log[commitIndex][1], sock)
 
