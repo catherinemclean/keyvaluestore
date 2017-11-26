@@ -46,10 +46,34 @@ def send_append_rpc(data, sock):
 	global leader_id
 	global my_id
 	global currentTerm
-	#print "append rpcs"
+	print "append rpcs"
 	raw_msg = {'src':my_id, 'dst':'FFFF', 'leader':leader_id, 'type':'appendrpc', 'term':currentTerm, 'data':data}
 	msg = json.dumps(raw_msg)
 	sock.send(msg)
+
+# Respond to a client's get message
+def get_response(msg, sock):
+	global state_machine
+	global my_id
+	global leader_id
+	value = ""
+	if (msg['key'] in state_machine):
+		value = state_machine[msg['key']]
+	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'ok', 'MID':msg['MID'], 'value':value}
+	json_msg = json.dumps(raw_msg)
+	if sock.send(json_msg):
+		print 'get response sent successfully'
+
+# Respond to a client's put message
+def put_response(msg, sock):
+	global state_machine
+	global my_id
+	global leader_id
+	state_machine[msg['key']] = msg['value']
+	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'ok', 'MID':msg['MID']}
+	json_msg = json.dumps(raw_msg)
+	if sock.send(json_msg):
+		print 'put response sent successfully'
 
 # Your ID number
 my_id = sys.argv[1]
@@ -66,7 +90,10 @@ last = time.time()
 appendLast = 0
 
 currentTerm = 0
+# who was voted for in this round
 votedFor = None
+
+# the log of transactions, a list of tuples with the command and the term 
 log = [(-1, -1)]
 
 commitIndex = 0
@@ -74,6 +101,9 @@ lastApplied = 0
 
 nextIndex = []
 matchIndex = []
+
+# the key value store data
+state_machine = {}
 
 # leader ID
 leader_id = 'FFFF'
@@ -99,15 +129,20 @@ while True:
 		
 		# For now, ignore get() and put() from clients
 		if msg['type'] in ['get', 'put']:
-			#print 'Received %s for MID %s' % (msg['type'], msg['MID'])
+			print 'Received %s for MID %s' % (msg['type'], msg['MID'])
 			if currentState != 'leader':
                 		reply = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'redirect','MID':msg['MID']}
-				#print 'Redirect message from %s to %s' % (my_id, leader_id)
-			else:
-                		reply = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'fail','MID':msg['MID']}
-			json_reply = json.dumps(reply)
-			if sock.send(json_reply):
-				print 'Successful %s for MID %s' % (msg['type'], msg['MID'])
+				print 'Redirect message from %s to %s' % (my_id, leader_id)
+				json_reply = json.dumps(reply)
+				if sock.send(json_reply):
+					print 'Successful %s for MID %s' % (msg['type'], msg['MID'])
+			elif msg['type'] == 'get':
+				log.append((msg, currentTerm))
+				get_response(msg, sock)
+			elif msg['type'] == 'put':
+				log.append((msg, currentTerm))
+				put_response(msg, sock)
+                		#reply = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'fail','MID':msg['MID']}
 
 		elif msg['type'] == 'appendrpc':
 			if currentState == 'candidate':
@@ -142,7 +177,6 @@ while True:
 			last = clock
 	#checks if received an Append RPC message in election timeout frame
 	if clock - last > election_timeout:
-		print 'TIMEOUT: id= %s clock= %s last= %s timeout- %s' % (my_id, clock, last, election_timeout)
 		# reset from last election
 		votes = 1
 		leader_id = 'FFFF'
