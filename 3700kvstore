@@ -16,12 +16,28 @@ def handle_vote_request(msg, sock):
 	global commitIndex
 	global my_id
 	vote = msg['term'] > currentTerm or (msg['term'] == currentTerm and msg['lastLogIndex'] > commitIndex) or (msg['term'] == currentTerm and msg['lastLogIndex'] == commitIndex and msg['lastLogTerm'] > log[commitIndex])
-	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':vote}
-	if vote:
+	to_vote = vote and votedFor is None
+	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':to_vote}
+	if to_vote:
 		votedFor = msg['candidateId']
 	msg = json.dumps(raw_msg)
 	if sock.send(msg):
 		print 'Successfully voted'
+
+# decide if we won the election, if so, send out heartbeats
+def tally_votes():
+	global votes
+	global currentState
+	global leader_id
+	global my_id
+	if votes > (len(replica_ids) + 1) / 2:
+		currentState = 'leader'
+		leader_id = my_id
+	send_append_rpc([])
+
+# Send out the given data to all nodes
+def send_append_rpc(data):
+	print "append rpcs"
 
 # Your ID number
 my_id = sys.argv[1]
@@ -52,6 +68,9 @@ leader_id = 'FFFF'
 #number of votes if you are a candidate
 votes = 0
 
+# represents if we're a leader, candidate, or follower
+currentState = 'follower'
+
 # represents the random timeout between 150 and 300 ms
 # stored in seconds
 election_timeout = random.randint(150, 300) / 1000
@@ -68,13 +87,19 @@ while True:
 		# For now, ignore get() and put() from clients
 		if msg['type'] in ['get', 'put']:
 			print 'Received %s for MID %s' % (msg['type'], msg['MID'])
-                	reply = {'src':my_id, 'dst':msg['src'], 'leader':'FFFF', 'type':'fail','MID':msg['MID']}
+			if currentState != 'leader':
+                		reply = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'redirect','MID':msg['MID']}
+			else:
+                		reply = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'fail','MID':msg['MID']}
 			json_reply = json.dumps(reply)
 			if sock.send(json_reply):
 				print 'Successful %s for MID %s' % (msg['type'], msg['MID'])
 
 		elif msg['type'] == 'appendrpc':
 			last = time.time()
+			if currentState == 'candidate':
+				currentState = 'follower'
+			votedFor = None
 		elif msg['type'] == 'requestvoterpc':
 			print "handling vote request"
 			handle_vote_request(msg, sock)
@@ -83,15 +108,25 @@ while True:
 				votes += 1
 			else:
 				currentTerm = msg['term']
+
 		# Handle noop messages. This may be removed from your final implementation
 		#elif msg['type'] == 'noop':
 			#print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
-		
+
+		if currentState == 'candidate':
+			tally_votes()
+	
 	clock = time.time()
 	#checks if received an Append RPC message in election timeout frame
 	if clock - last > election_timeout:
-		# vote for ourself
-		votes += 1
+		# reset from last election
+		votes = 1
+		leader_id = 'FFFF'
+		votedFor = None
+		# change our state to be a candidate
+		currentState = 'candidate'
+		# increment term
+		currentTerm += 1
 		# if election timeout, declare yourself the leader
 		request_vote(currentTerm, my_id, commitIndex, log[commitIndex][1], sock)
 
