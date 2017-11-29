@@ -1,0 +1,54 @@
+Replica/Server
+	- id
+	- leader_id
+	- replica_ids
+	- socket
+	- current_term : latest term server has seen (initialized to 0 on first boot, increases monotonically)
+			(Updated on stable storage before responding to RPCs)
+	- log : log of transactions; a list of tuples with the term and the command (as client msg) (first index is 1)
+			(Updated on stable storage before responding to RPCs)
+	- commit_idx : index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	- last_applied : index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+	- current_state : { FOLLOWER, CANDIDATE, or LEADER }
+	- state_machine : actual key-value store
+
+	TIMEOUT VARS
+	- election_timeout
+	- last : time last append_entry_rpc received from leader
+	- append_last : (replica is leader) time when last sent append_entry_rpc
+
+	VOTING SPECIFIC VARS
+	- voted_for :  (Updated on stable storage before responding to RPCs)
+	- votes : number of votes received if candidate
+
+	LEADER ONLY VARS (reinitialized after each election)
+	- next_idx{} for each server, index of the next log entry to send to that server
+			(initialized to leader last log index + 1)
+	- match_idx{} for each server, index of highest log entry known to be replicated on server
+	        (initialized to 0, increases monotonically)
+
+
+
+
+METHODS:
+
+	become_candidate() - (assume follower) after election timeout, change state to candidate and request_vote_rpc()
+	tally_votes() - (assume candidate) tally votes from vote replies received
+	become_leader() - (assume candidate and won election) declare self as leader, init necessary values, send heartbeat
+	become_follower() - reset all vars specific to candidate/leader to null (or something?) and change to follower
+
+	redirect_client() - if not leader and receive msg from client, respond to client with redirect msg
+
+	request_vote() - declared self as candidate, so now RequestVote RPC
+	handle_vote_request() - determine if vote will be granted to candidate and send vote response back to candidate
+							if leader, become_follower()
+
+	recv_append_ent() - if heartbeat, update leader; etc
+
+	LEADER-SPECIFIC***
+	send_append_ent() - (after a put/get command received from client) add to log;
+							for each replica, send appropriate entries (according to next_idx)
+	handle_fail() - (after received fail from follower) decrement next_idx[replica_id] and retry send_append_ent()
+	handle_ok() - (after received ok from follower) increment next_idx[replica_id]; update_commit_idx()
+	update_commit_idx() - check for quorum at commit_idx + 1's entry; if quorum, update commit_idx, apply command to
+							state_machine, and send corresponding response to client

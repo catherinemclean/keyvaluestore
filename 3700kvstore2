@@ -1,0 +1,95 @@
+#!/usr/bin/env python
+
+import sys, socket, select, time, json, random, decimal
+from replica import Replica
+from constants import *
+
+# Your ID number
+my_id = sys.argv[1]
+
+# The ID numbers of all the other replicas
+replica_ids = sys.argv[2:]
+
+rep = Replica(my_id, replica_ids)
+
+while True:
+	ready = select.select([rep.sock], [], [], 0.1)[0]
+
+	if rep.sock in ready:
+		msg_raw = rep.sock.recv(32768)
+
+		if len(msg_raw) == 0: continue
+		msg = json.loads(msg_raw)
+		msg_type = msg['type']
+
+		'''
+		TODO: GENERAL FOR ALL SERVERS:
+			• If commitIndex > lastApplied: increment lastApplied, apply
+				log[lastApplied] to state machine (§5.3)
+			• If RPC request or response contains term T > currentTerm:
+				set currentTerm = T, convert to follower (§5.1)
+		'''
+
+		if rep.current_state == LEADER:
+			if msg_type in [GET, PUT]:
+				rep.send_append_ent(msg)
+
+			elif msg_type == OK:
+				rep.handle_ok(msg)
+
+			elif msg_type == FAIL:
+				rep.handle_fail(msg)
+
+			elif msg_type == VOTE_REPLY:
+				continue # if already leader, could just be delayed vote, so just ignore
+
+			elif msg_type == VOTE_REQ:
+				rep.become_follower()
+
+
+		else: # either follower or candidate
+			# Redirect get() and put() from clients to leader
+			if msg_type in [GET, PUT]:
+				rep.redirect_client(msg)
+
+			elif msg_type == APPEND_ENT:
+				rep.recv_append_ent(msg) # this method should include all of this stuff below...
+
+				# # first append_entry_rpc sent out by new leader
+				# if msg['data'] == []:
+				# 	if rep.current_state == CANDIDATE:
+				# 		rep.current_state = FOLLOWER
+				# 	rep.voted_for = None
+				# 	votes = 0
+				# 	leader_id = msg['leader']
+				# 	rep.current_term = msg['term']
+				# 	print 'leader for replica %s is %s' % (my_id, leader_id)
+				#
+				# else: # regular append_entry_rpc
+				# 	print '[%s] Received appendEntryRPC from leader %s' % (my_id, leader_id)
+				# 	# TODO: replicate log stuff
+				#
+				# # reset timeout clock
+				# rep.last = time.time()
+
+
+			elif msg_type == VOTE_REQ:
+				rep.handle_vote_request(msg)
+
+			elif msg_type == VOTE_REPLY:
+				if msg['vote']:
+					if rep.current_state == CANDIDATE:
+						rep.tally_votes()
+				else:
+					rep.current_term = msg['term']
+
+
+	clock = time.time()
+	if rep.current_state == LEADER:
+		if clock - rep.append_last > .1:
+			rep.send_append_ent()
+
+	#checks if received an Append RPC message in election timeout frame
+	elif clock - rep.last > rep.election_timeout:
+		rep.become_candidate()
+
