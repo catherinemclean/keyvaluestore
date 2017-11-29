@@ -43,7 +43,24 @@ METHODS:
 	handle_vote_request() - determine if vote will be granted to candidate and send vote response back to candidate
 							if leader, become_follower()
 
-	recv_append_ent() - if heartbeat, update leader; etc
+	recv_append_ent() - if heartbeat, update leader; etc...
+	    Receiver implementation:
+			1. Reply false if term < currentTerm (§5.1)
+			2. Reply false if log doesn’t contain an entry at prevLogIndex
+				whose term matches prevLogTerm (§5.3)
+			3. If an existing entry conflicts with a new one (same index
+				but different terms), delete the existing entry and all that
+				follow it (§5.3)
+			4. Append any new entries not already in the log
+			5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+
+			Results (sent back to leader):
+			term - currentTerm, for leader to update itself
+			success - true if follower contained entry matching prevLogIndex and prevLogTerm
+
+			:param msg: the json msg received from leader
+			:return:
+
 
 	LEADER-SPECIFIC***
 	send_append_ent() - (after a put/get command received from client) add to log;
