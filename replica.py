@@ -110,14 +110,32 @@ class Replica:
 
 		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': VOTE_REPLY,
 		           'term': self.current_term, 'vote': to_vote}
-		msg = json.dumps(raw_msg)
-		if self.sock.send(msg):
+		reply = json.dumps(raw_msg)
+		if self.sock.send(reply):
 			v = 'Accepted' if self.voted_for else 'Denied'
 			print '[%s] %s vote request from %s' % (self.id, v, msg['candidate_id'])
 
 
 	# AppendEntry RPC receiver implementation
 	def recv_append_ent(self, msg):
+		# first append_entry_rpc sent out by new leader
+		if msg['entries'] == [] and self.voted_for != None:
+			print '[%s] New leader: %s' % (self.id, msg['leader'])
+			if self.current_state == CANDIDATE:
+				self.current_state = FOLLOWER
+				
+			self.voted_for = None
+			self.votes = 0
+			self.leader_id = msg['leader']
+			self.current_term = msg['term']
+
+		else:  # regular append_entry_rpc
+			print '[%s] Received appendEntryRPC from leader %s' % (self.id, self.leader_id)
+		# TODO: replicate log stuff
+
+		# reset timeout clock
+		self.last = time.time()
+
 		# TODO: implement (for now, always just reply to leader with ok)
 		assert(self.leader_id == msg['src'])
 		raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id, 'type': OK, 'term': self.current_term}
@@ -165,7 +183,8 @@ class Replica:
 			           'prev_log_idx': prev_log_idx, 'prev_log_term': prev_log_term,
 			           'leader_commit': self.commit_idx, 'entries': entries}
 			app_ent = json.dumps(raw_msg)
-			self.sock.send(app_ent)
+			if self.sock.send(app_ent):
+				print '[%s] Sent heartbeat to all replicas' % self.id
 
 
 	# handle receiving failed message from follower
