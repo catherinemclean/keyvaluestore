@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 
-import sys, socket, select, time, json, random, decimal
-from constants import *
+import decimal
+import json
+import random
+import socket
+import time
+
+from src.constants import *
 
 
 class Replica:
