@@ -5,6 +5,7 @@ import json
 import random
 import socket
 import time
+from statistics import median, median_low
 
 from src.constants import *
 
@@ -30,6 +31,7 @@ class Replica:
 		self.voted_for = None   # who this replica voted for in this round
 		
 		# Leader specific vars (only used if leader)
+		# (next_idx and match_idx do not include self)
 		self.next_idx = {}      # for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
 		self.match_idx = {}     # for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 		self.append_last = 0    # time when last append_entry RPC was sent
@@ -123,30 +125,61 @@ class Replica:
 
 	# AppendEntry RPC receiver implementation
 	def recv_append_ent(self, msg):
-		# first append_entry_rpc sent out by new leader
-		if msg['entries'] == [] and self.voted_for != None:
-			print '[%s] New leader: %s' % (self.id, msg['leader'])
-			if self.current_state == CANDIDATE:
-				self.current_state = FOLLOWER
-				
-			self.voted_for = None
-			self.votes = 0
-			self.leader_id = msg['leader']
-			self.current_term = msg['term']
+		if msg['entries'] == []:
+			# initial heartbeat from new leader
+			if self.voted_for != None:
+				if msg['term'] >= self.current_term:
+					# acceptable new leader
+					print '[%s] New leader: %s' % (self.id, msg['leader'])
+					if self.current_state == CANDIDATE:
+						self.current_state = FOLLOWER
 
-		else:  # regular append_entry_rpc
+					self.voted_for = None
+					self.votes = 0
+					self.leader_id = msg['leader']
+					self.current_term = msg['term']
+					self.last = time.time()
+
+				else:
+					# reject new leader, remain candidate
+					raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
+					       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
+					reply = json.dumps(raw)
+					if self.sock.send(reply):
+						print '[%s] Rejected leader %s' % (self.id, msg['src'])
+
+			# regular heartbeat
+			else:
+				self.last = time.time()
+
+		# regular append_entry_rpc
+		else:
 			print '[%s] Received appendEntryRPC from leader %s' % (self.id, self.leader_id)
-		# TODO: replicate log stuff
+			prev_log_idx = msg['prev_log_idx']
 
-		# reset timeout clock
-		self.last = time.time()
+			if msg['term'] > self.current_term or prev_log_idx >= len(self.log):
+				reply_type = FAIL
 
-		# TODO: implement (for now, always just reply to leader with ok)
-		assert(self.leader_id == msg['src'])
-		raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id, 'type': OK, 'term': self.current_term}
-		ok = json.dumps(raw)
-		if self.sock.send(ok):
-			print '[%s] Sent OK to leader %s' % (self.id, self.leader_id)
+			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
+				# remove incorrect entry at prev_log_idx and any entries after
+				self.log = self.log[:prev_log_idx]
+				reply_type = FAIL
+
+			else: # logs match
+				self.log = self.log[:prev_log_idx] + msg['entries']
+				reply_type = OK
+
+				if msg['commit_idx'] > self.commit_idx:
+					self.commit_idx = min(msg['commit_idx'], len(self.log) - 1)
+
+			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
+			         'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
+			reply = json.dumps(raw)
+			if self.sock.send(reply):
+				print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
+
+			# reset timeout clock
+			self.last = time.time()
 
 
 	# respond to client with redirect message if not leader
@@ -194,20 +227,52 @@ class Replica:
 
 	# handle receiving failed message from follower
 	def handle_fail(self, msg):
-		return 0
+		# decrement and retry sending append_ent msg to that follower
+		follower_id = msg['src']
+		self.next_idx[follower_id] -= 1
+		follower_next = self.next_idx[follower_id]
+		entries = self.log[follower_next:]
+
+		raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
+		           'term': self.current_term, 'prev_log_idx': follower_next - 1,
+		           'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
+		           'entries': entries}
+		app_ent = json.dumps(raw_msg)
+		if self.sock.send(app_ent):
+			print '[%s] Sent append_entry_rpc to follower %s' % (self.id, follower_id)
 
 
 	# handle receiving ok message from follower
 	def handle_ok(self, msg):
-		return 0
+		# update follower's next_idx and match_idx
+		follower_id = msg['src']
+		self.next_idx[follower_id] = msg['last_log_idx'] + 1
+		self.match_idx[follower_id] = msg['last_log_idx']
+
+		# check for quorum of new entries
+		self.update_commit_idx()
 
 
 	# check for quorum to update commit index and be able to respond to client
 	def update_commit_idx(self):
-		return 0
+		# median if even number total replicas b/c match_idx will be odd (doesn't include self)
+		# median_low if odd number total replicas b/c match_idx will be even
+		# (ex: [1, 3, 5, 7] leader already agrees, so only need 2/4 for quorum)
 
+		if len(self.replica_ids)%2 == 0: # odd number of total replicas
+			# the highest log entry index replicated on majority of servers
+			highest_quorum_idx = median_low(self.match_idx.values())
+		else:
+			highest_quorum_idx = median(self.match_idx.values())
 
-	# respond to client command (once quorum reached)
+		# new log entry has been committed
+		if highest_quorum_idx > self.commit_idx:
+			for ii in range(self.commit_idx+1, highest_quorum_idx+1):
+				self.respond_to_client(ii)
+
+			self.commit_idx = highest_quorum_idx
+
+	# apply command to state machine and send response to client
 	# @param idx: the log index of the command being responded to
 	def respond_to_client(self, idx):
 		return 0

@@ -1,145 +1,12 @@
 #!/usr/bin/env python
 
-import sys, socket, select, time, json, random, decimal
+import json
+import select
+import sys
+import time
 
-
-# Sends out RequestVote RPCs to declare self candidate
-def request_vote (term, candidateId, lastLogIndex, lastLogTerm, sock):
-	raw_msg = {'src':candidateId, 'dst':'FFFF', 'leader':'FFFF', 'type':'requestvoterpc', 'term':term, 'candidateId':candidateId, 'lastLogIndex':lastLogIndex, 'lastLogTerm':lastLogTerm}
-	msg = json.dumps(raw_msg)
-	if sock.send(msg):
-		print '[%s] Sent out vote requests' % (candidateId)
-
-# See if we want to vote for the candidate
-def handle_vote_request(msg, sock):
-	global votedFor
-	global currentTerm
-	global commitIndex
-	global my_id
-	global last
-	vote = msg['term'] > currentTerm or (msg['term'] == currentTerm and msg['lastLogIndex'] > len(log) - 1) or (msg['term'] == currentTerm and msg['lastLogIndex'] == (len(log) - 1) and msg['lastLogTerm'] >= log[len(log) - 1][1])
-	to_vote = vote and (votedFor is None or msg['term'] > currentTerm)
-	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':'FFFF', 'type':'replyvoterpc', 'term':currentTerm, 'vote':to_vote}
-	if to_vote:
-		votedFor = msg['candidateId']
-		currentTerm = msg['term']
-		last = time.time()
-	msg = json.dumps(raw_msg)
-	if sock.send(msg):
-		v = 'Accepted' if votedFor else 'Denied'
-		print '[%s] %s vote request from %s' % (my_id, v, msg['candidateId'])
-
-# decide if we won the election, if so, send out heartbeats
-def tally_votes(sock):
-	global votes
-	global currentState
-	global leader_id
-	global my_id
-	global appendLast
-	global nextIndex, matchIndex, log
-	print '[%s] election results: votes = %s, total = %s' % (my_id, votes, len(replica_ids) + 1)
-	if votes > (len(replica_ids) + 1) / 2:
-		currentState = 'leader'
-		leader_id = my_id
-
-		# reset/initialize nextIndex and matchIndex
-		for id in replica_ids:
-			nextIndex[id] = len(log) # initialized to leader's last log index + 1
-			matchIndex[id] = 0 # initialized to 0
-
-		# send_append_rpc([], sock)
-		send_append_ent()
-		appendLast = time.time()
-
-# # Send out the given data to all nodes
-# def send_append_rpc(data, sock):
-# 	global leader_id
-# 	global my_id
-# 	global currentTerm
-# 	print "append rpcs"
-# 	raw_msg = {'src':my_id, 'dst':'FFFF', 'leader':leader_id, 'type':'appendrpc', 'term':currentTerm, 'data':data}
-# 	msg = json.dumps(raw_msg)
-# 	sock.send(msg)
-
-def send_append_ent(data=None):
-	global log, my_id, leader_id, currentTerm, commitIndex, nextIndex, matchIndex
-	prev_log_idx = len(log) - 1 # index of log entry immediately preceding the new entry
-	prev_log_term = log[prev_log_idx](0)
-
-	if data != None: # new log entries
-		log.append(data) # data is just msg received from client
-
-		for id in replica_ids:
-			entries = log[nextIndex[id]:]
-			raw_msg = {'src':my_id, 'dst':id, 'leader':leader_id, 'type':'appendrpc', 'term':currentTerm,
-			           'prev_log_idx': prev_log_idx, 'prev_log_term': prev_log_term,
-			           'leader_commit': commitIndex, 'entries': entries}
-			msg = json.dumps(raw_msg)
-			if sock.send(msg):
-				print '[%s] Sent append_entry_rpc to follower %s' % (my_id, id)
-				self.append_last = time.time()
-
-
-	else: # new leader, initial heartbeat for log replication
-		entries = [] # log entries for the replica to store
-		raw_msg = {'src': my_id, 'dst': 'FFFF', 'leader': leader_id, 'type': 'appendrpc', 'term': currentTerm,
-		           'prev_log_idx': prev_log_idx, 'prev_log_term': prev_log_term,
-		           'leader_commit': commitIndex, 'entries': entries}
-		msg = json.dumps(raw_msg)
-		sock.send(msg)
-
-
-def recv_append_ent(msg):
-	'''
-	GENERAL FOR ALL SERVERS:
-	• If commitIndex > lastApplied: increment lastApplied, apply
-		log[lastApplied] to state machine (§5.3)
-	• If RPC request or response contains term T > currentTerm:
-		set currentTerm = T, convert to follower (§5.1)
-
-
-	Receiver implementation:
-	1. Reply false if term < currentTerm (§5.1)
-	2. Reply false if log doesn’t contain an entry at prevLogIndex
-		whose term matches prevLogTerm (§5.3)
-	3. If an existing entry conflicts with a new one (same index
-		but different terms), delete the existing entry and all that
-		follow it (§5.3)
-	4. Append any new entries not already in the log
-	5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-
-	Results (sent back to leader):
-	term - currentTerm, for leader to update itself
-	success - true if follower contained entry matching prevLogIndex and prevLogTerm
-
-	:param msg: the json msg received from leader
-	:return:
-	'''
-
-
-# Respond to a client's get message
-def get_response(msg, sock):
-	global state_machine
-	global my_id
-	global leader_id
-	value = ""
-	if (msg['key'] in state_machine):
-		value = state_machine[msg['key']]
-	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'ok', 'MID':msg['MID'], 'value':value}
-	json_msg = json.dumps(raw_msg)
-	if sock.send(json_msg):
-		print '[%s] get response sent to client' % (my_id)
-
-# Respond to a client's put message
-def put_response(msg, sock):
-	global state_machine
-	global my_id
-	global leader_id
-	state_machine[msg['key']] = msg['value']
-	raw_msg = {'src':my_id, 'dst':msg['src'], 'leader':leader_id, 'type':'ok', 'MID':msg['MID']}
-	json_msg = json.dumps(raw_msg)
-	if sock.send(json_msg):
-		print '[%s] put response sent to client' % (my_id)
+from src.replica import Replica
+from src.constants import *
 
 # Your ID number
 my_id = sys.argv[1]
@@ -147,132 +14,68 @@ my_id = sys.argv[1]
 # The ID numbers of all the other replicas
 replica_ids = sys.argv[2:]
 
-# Connect to the network. All messages to/from other replicas and clients will
-# occur over this socket
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-sock.connect(my_id)
-
-last = time.time()
-appendLast = 0
-
-currentTerm = 0
-# who was voted for in this round
-votedFor = None
-
-# the log of transactions, a list of tuples with the command and the term 
-log = [(-1, -1)]
-
-commitIndex = 0
-lastApplied = 0
-
-nextIndex = {}
-matchIndex = {}
-
-# the key value store data
-state_machine = {}
-
-# leader ID
-leader_id = 'FFFF'
-
-#number of votes if you are a candidate
-votes = 0
-
-# represents if we're a leader, candidate, or follower
-currentState = 'follower'
-
-# represents the random timeout between 150 and 300 ms
-# stored in seconds
-election_timeout = decimal.Decimal(random.randint(150, 300)) / 1000
+rep = Replica(my_id, replica_ids)
 
 while True:
-	ready = select.select([sock], [], [], 0.1)[0]
+	ready = select.select([rep.sock], [], [], 0.1)[0]
 
-	if sock in ready:
-		msg_raw = sock.recv(32768)
+	if rep.sock in ready:
+		msg_raw = rep.sock.recv(32768)
 
 		if len(msg_raw) == 0: continue
 		msg = json.loads(msg_raw)
+		msg_type = msg['type']
 
+		'''
+		TODO: GENERAL FOR ALL SERVERS:
+			- If commitIndex > lastApplied: increment lastApplied, apply
+				log[lastApplied] to state machine (5.3)
+			- If RPC request or response contains term T > currentTerm:
+				set currentTerm = T, convert to follower (5.1)
+		'''
 
-		if currentState == 'leader':
-			def msg_type_err(type):
-				print '[%s] Received unknown msg type: %s' % (my_id, type)
+		if rep.current_state == LEADER:
+			if msg_type in [GET, PUT]:
+				rep.send_append_ent(msg)
 
+			elif msg_type == OK:
+				rep.handle_ok(msg)
 
-			def switch(type):
-				return {
-					'get': get(msg),
-					'put': put(msg),
-					'ok': handle_ok(msg),
-					'fail': handle_fail(msg),
-					'replyvoterpc': None, # ignore a vote reply if already leader
-					'requestvoterpc': 0 # TODO: how to handle leader receiving news of election?
-				}.get(type, msg_type_err(type))
+			elif msg_type == FAIL:
+				rep.handle_fail(msg)
 
-			switch(msg['type'])
+			elif msg_type == VOTE_REPLY:
+				continue # if already leader, could just be delayed vote, so just ignore
+
+			elif msg_type == VOTE_REQ:
+				rep.become_follower()
 
 
 		else: # either follower or candidate
-
 			# Redirect get() and put() from clients to leader
-			if msg['type'] in ['get', 'put']:
-				reply = {'src': my_id, 'dst': msg['src'], 'leader': leader_id, 'type': 'redirect', 'MID': msg['MID']}
-				print '[%s] Redirect message to leader %s' % (my_id, leader_id)
-				json_reply = json.dumps(reply)
-				if sock.send(json_reply):
-					print '[%s] Successful %s for MID %s' % (my_id, msg['type'], msg['MID'])
+			if msg_type in [GET, PUT]:
+				rep.redirect_client(msg)
 
+			elif msg_type == APPEND_ENT:
+				rep.recv_append_ent(msg)
 
-			elif msg['type'] == 'appendrpc':
-				# first append_entry_rpc sent out by new leader
-				if msg['data'] == []:
-					if currentState == 'candidate':
-						currentState = 'follower'
-					votedFor = None
-					votes = 0
-					leader_id = msg['leader']
-					currentTerm = msg['term']
-					print 'leader for replica %s is %s' % (my_id, leader_id)
+			elif msg_type == VOTE_REQ:
+				rep.handle_vote_request(msg)
 
-				else: # regular append_entry_rpc
-					print '[%s] Received appendEntryRPC from leader %s' % (my_id, leader_id)
-					# TODO: replicate log stuff
-
-				# reset timeout clock
-				last = time.time()
-
-
-			elif msg['type'] == 'requestvoterpc':
-				handle_vote_request(msg, sock)
-
-
-			elif msg['type'] == 'replyvoterpc':
+			elif msg_type == VOTE_REPLY:
 				if msg['vote']:
-					votes += 1
-					if currentState == 'candidate':
-						tally_votes(sock)
+					if rep.current_state == CANDIDATE:
+						rep.tally_votes()
 				else:
-					currentTerm = msg['term']
+					rep.current_term = msg['term']
 
 
 	clock = time.time()
-	if currentState == 'leader':
-		if clock - appendLast > .1:
-			# send_append_rpc([], sock)
-			send_append_ent()
-			appendLast = clock
-			last = clock
+	if rep.current_state == LEADER:
+		if clock - rep.append_last > .1:
+			rep.send_append_ent()
 
 	#checks if received an Append RPC message in election timeout frame
-	elif clock - last > election_timeout:
-		# reset from last election
-		votes = 1
-		leader_id = 'FFFF'
-		votedFor = my_id
-		# change our state to be a candidate
-		currentState = 'candidate'
-		# increment term
-		currentTerm += 1
-		# if election timeout, declare yourself the leader
-		request_vote(currentTerm, my_id, len(log) - 1, log[len(log) - 1][1], sock)
-		last = clock
+	elif clock - rep.last > rep.election_timeout:
+		rep.become_candidate()
+
