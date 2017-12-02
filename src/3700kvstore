@@ -5,8 +5,8 @@ import select
 import sys
 import time
 
-from src.replica import Replica
-from src.constants import *
+from replica import Replica
+from constants import *
 
 # Your ID number
 my_id = sys.argv[1]

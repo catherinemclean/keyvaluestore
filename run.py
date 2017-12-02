@@ -4,7 +4,7 @@ import sys, os, time, json, socket, select, random, subprocess, string, hashlib,
 
 VERSION = "0.6"
 
-REPLICA_PROG = './3700kvstore'
+REPLICA_PROG = './src/3700kvstore'
 NUM_CLIENTS = 8
 
 #######################################################################################################

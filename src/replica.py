@@ -5,9 +5,9 @@ import json
 import random
 import socket
 import time
-from statistics import median, median_low
-
-from src.constants import *
+#from statistics import median, median_low
+from numpy import median
+from constants import *
 
 
 class Replica:
@@ -160,6 +160,10 @@ class Replica:
 			if msg['term'] > self.current_term or prev_log_idx >= len(self.log):
 				reply_type = FAIL
 
+			elif len(self.log)-1 < prev_log_idx:
+				reply_type = FAIL
+
+			# TODO this gives an index out of bounds error
 			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
 				# remove incorrect entry at prev_log_idx and any entries after
 				self.log = self.log[:prev_log_idx]
@@ -169,8 +173,8 @@ class Replica:
 				self.log = self.log[:prev_log_idx] + msg['entries']
 				reply_type = OK
 
-				if msg['commit_idx'] > self.commit_idx:
-					self.commit_idx = min(msg['commit_idx'], len(self.log) - 1)
+				if msg['leader_commit'] > self.commit_idx:
+					self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
 
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
 			         'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
@@ -252,6 +256,9 @@ class Replica:
 		# check for quorum of new entries
 		self.update_commit_idx()
 
+	def median_low(self, values):
+		n = len(values)
+		return sorted(values)[n//2-1]
 
 	# check for quorum to update commit index and be able to respond to client
 	def update_commit_idx(self):
@@ -261,7 +268,7 @@ class Replica:
 
 		if len(self.replica_ids)%2 == 0: # odd number of total replicas
 			# the highest log entry index replicated on majority of servers
-			highest_quorum_idx = median_low(self.match_idx.values())
+			highest_quorum_idx = self.median_low(self.match_idx.values())
 		else:
 			highest_quorum_idx = median(self.match_idx.values())
 
@@ -275,31 +282,28 @@ class Replica:
 	# apply command to state machine and send response to client
 	# @param idx: the log index of the command being responded to
 	def respond_to_client(self, idx):
-		return 0
+		msg = self.log[idx][1]
+		if (msg['type'] == GET):
+			self.get_response(msg)
+		elif (msg['type'] == PUT):
+			self.put_response(msg)
+		#return 0
 
-	# # Respond to a client's get message
-	# def get_response(msg, sock):
-	# 	global state_machine
-	# 	global my_id
-	# 	global leader_id
-	# 	value = ""
-	# 	if (msg['key'] in state_machine):
-	# 		value = state_machine[msg['key']]
-	# 	raw_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader_id, 'type': 'ok', 'MID': msg['MID'],
-	# 	           'value': value}
-	# 	json_msg = json.dumps(raw_msg)
-	# 	if sock.send(json_msg):
-	# 		print
-	# 		'[%s] get response sent to client' % (my_id)
-	#
-	# # Respond to a client's put message
-	# def put_response(msg, sock):
-	# 	global state_machine
-	# 	global my_id
-	# 	global leader_id
-	# 	state_machine[msg['key']] = msg['value']
-	# 	raw_msg = {'src': my_id, 'dst': msg['src'], 'leader': leader_id, 'type': 'ok', 'MID': msg['MID']}
-	# 	json_msg = json.dumps(raw_msg)
-	# 	if sock.send(json_msg):
-	# 		print
-	# 		'[%s] put response sent to client' % (my_id)
+	# Respond to a client's get message
+	def get_response(self, msg):
+	 	value = ""
+	 	if (msg['key'] in self.state_machine):
+	 		value = self.state_machine[msg['key']]
+	 	raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID'],
+	 	           'value': value}
+	 	json_msg = json.dumps(raw_msg)
+	 	if self.sock.send(json_msg):
+	 		print '[%s] get response sent to client' % (self.id)
+
+	# Respond to a client's put message
+	def put_response(self, msg):
+	 	self.state_machine[msg['key']] = msg['value']
+	 	raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID']}
+	 	json_msg = json.dumps(raw_msg)
+	 	if self.sock.send(json_msg):
+	 		print '[%s] put response sent to client' % (self.id)
