@@ -27,7 +27,7 @@ class Replica:
 
 		# Persistent state on all servers (Updated on stable storage before responding to RPCs)
 		self.current_term = 0   # latest term server has seen (initialized to 0 on first boot, increases monotonically)
-		self.log = [(-1, -1)]   # log of transactions as tuples with the term and the command (as client msg); first index is 1
+		self.log = [(-1, {})]   # log of transactions as tuples with the term and the command (as client msg); first index is 1
 		self.voted_for = None   # who this replica voted for in this round
 		
 		# Leader specific vars (only used if leader)
@@ -146,7 +146,7 @@ class Replica:
 					       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
 					reply = json.dumps(raw)
 					if self.sock.send(reply):
-						print '[%s] Rejected leader %s' % (self.id, msg['src'])
+						print '[%s] Rejected leader %s\n\n' % (self.id, msg['src'])
 
 			# regular heartbeat
 			else:
@@ -154,23 +154,34 @@ class Replica:
 
 		# regular append_entry_rpc
 		else:
-			print '[%s] Received appendEntryRPC from leader %s' % (self.id, self.leader_id)
+			print '[%s] Received appendEntryRPC' % (self.id)
+			print '[%s] Received entries: %s' % (self.id, msg['entries'])
 			prev_log_idx = msg['prev_log_idx']
 
-			if msg['term'] > self.current_term or prev_log_idx >= len(self.log):
+			if msg['term'] < self.current_term or prev_log_idx > len(self.log)-1:
 				reply_type = FAIL
+				print '[%s] ****FAIL TO LEADER: lterm=%s < cur_term=%s ? OR prevlogidx=%s >= len(self.log)=%s ?' % (self.id, msg['term'], self.current_term, prev_log_idx, len(self.log))
 
-			elif len(self.log)-1 < prev_log_idx:
-				reply_type = FAIL
+			#elif len(self.log)-1 < prev_log_idx:
+			#	reply_type = FAIL
 
 			# TODO this gives an index out of bounds error
 			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
 				# remove incorrect entry at prev_log_idx and any entries after
 				self.log = self.log[:prev_log_idx]
 				reply_type = FAIL
+			#	print '[%s] ****FAIL TO LEADER: self.log[pli][0]=%s != msg[prevlogterm]=%s' % (self.id, self.log[prev_log_idx][0], msg['prev_log_term'])
 
 			else: # logs match
-				self.log = self.log[:prev_log_idx] + msg['entries']
+				entries = []
+				for entry in msg['entries']:
+					entries.append(tuple(entry))
+
+				#print 'LOGS MATCHHHH!!!!'
+				#print '[%s] before log: %s, entries: %s, prevlogidx=%s' % (self.id, self.log, entries, prev_log_idx)
+				#print '[%s] self.log[:prev_log_idx+1] = %s' % (self.id, self.log[:prev_log_idx+1])
+				self.log = self.log[:prev_log_idx+1] + entries
+				#print '[%s] after log: %s' % (self.id, self.log)
 				reply_type = OK
 
 				if msg['leader_commit'] > self.commit_idx:
@@ -179,6 +190,7 @@ class Replica:
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
 			         'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
 			reply = json.dumps(raw)
+			#self.sock.send(reply)
 			if self.sock.send(reply):
 				print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
 
@@ -202,19 +214,23 @@ class Replica:
 		self.append_last = time.time()
 		self.last = self.append_last
 
-		prev_log_idx = len(self.log) - 1  # index of log entry immediately preceding the new entry
-		prev_log_term = self.log[prev_log_idx][0]
+		#prev_log_idx = len(self.log) - 1  # index of log entry immediately preceding the new entry
+		#prev_log_term = self.log[prev_log_idx][0]
 
 		if msg != None:  # new log entries
+			prev_log_idx = len(self.log) - 1
+			prev_log_term = self.log[prev_log_idx][0]
 			self.log.append((self.current_term, msg))  # add client command to log
-
+			print 'LEADER LOG: %s' % self.log
 			for id in self.replica_ids:
 				entries = self.log[self.next_idx[id]:]
+				#print 'SENDING ENTRIES: %s' % entries
 				raw_msg = {'src': self.id, 'dst': id, 'leader': self.leader_id, 'type': APPEND_ENT,
 				           'term': self.current_term, 'prev_log_idx': prev_log_idx,
 				           'prev_log_term': prev_log_term, 'leader_commit': self.commit_idx,
 				           'entries': entries}
 				app_ent = json.dumps(raw_msg)
+				#self.sock.send(app_ent)
 				if self.sock.send(app_ent):
 					print '[%s] Sent append_entry_rpc to follower %s' % (self.id, id)
 
@@ -222,7 +238,7 @@ class Replica:
 			entries = []  # log entries for the replica to store
 			raw_msg = {'src': self.id, 'dst': 'FFFF', 'leader': self.leader_id,
 			           'type': APPEND_ENT, 'term': self.current_term,
-			           'prev_log_idx': prev_log_idx, 'prev_log_term': prev_log_term,
+			           'prev_log_idx': None, 'prev_log_term': None,
 			           'leader_commit': self.commit_idx, 'entries': entries}
 			app_ent = json.dumps(raw_msg)
 			if self.sock.send(app_ent):
@@ -243,7 +259,7 @@ class Replica:
 		           'entries': entries}
 		app_ent = json.dumps(raw_msg)
 		if self.sock.send(app_ent):
-			print '[%s] Sent append_entry_rpc to follower %s' % (self.id, follower_id)
+			print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
 
 
 	# handle receiving ok message from follower
@@ -258,7 +274,7 @@ class Replica:
 
 	def median_low(self, values):
 		n = len(values)
-		return sorted(values)[n//2-1]
+		return sorted(values)[n/2-1]
 
 	# check for quorum to update commit index and be able to respond to client
 	def update_commit_idx(self):
@@ -274,6 +290,9 @@ class Replica:
 
 		# new log entry has been committed
 		if highest_quorum_idx > self.commit_idx:
+			print 'commit_idx=%s, highest_quorum_idx=%s, so now range(commitidx+1=%s, hqi+1=%s)' % (self.commit_idx, highest_quorum_idx, self.commit_idx+1, highest_quorum_idx+1)
+			print 'next_idx=%s, match_idx= %s' % (self.next_idx, self.match_idx)
+			print 'LEADER LOG: %s' % self.log
 			for ii in range(self.commit_idx+1, highest_quorum_idx+1):
 				self.respond_to_client(ii)
 
@@ -282,6 +301,7 @@ class Replica:
 	# apply command to state machine and send response to client
 	# @param idx: the log index of the command being responded to
 	def respond_to_client(self, idx):
+		print 'respond_to_client(idx=%s)' % idx
 		msg = self.log[idx][1]
 		if (msg['type'] == GET):
 			self.get_response(msg)
