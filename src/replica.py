@@ -93,7 +93,7 @@ class Replica:
 		last_log_idx = len(self.log) - 1
 		last_log_term = self.log[len(self.log) - 1][1]
 		raw_msg = {'src': self.id, 'dst': 'FFFF', 'leader': 'FFFF', 'type': VOTE_REQ, 'term': self.current_term,
-		           'candidate_id': self.id, 'last_log_idx': last_log_idx, 'last_log_term': last_log_term}
+				   'candidate_id': self.id, 'last_log_idx': last_log_idx, 'last_log_term': last_log_term}
 		msg = json.dumps(raw_msg)
 		if self.sock.send(msg):
 			print '[%s] Sent out vote requests' % (self.id)
@@ -103,11 +103,11 @@ class Replica:
 	# Determine if vote will be granted to candidate and send vote response back to candidate
 	def handle_vote_request(self, msg):
 		vote = (msg['term'] > self.current_term or
-		        (msg['term'] == self.current_term and
-		            msg['last_log_idx'] > len(self.log) - 1) or
-		        (msg['term'] == self.current_term and
-		            msg['last_log_idx'] == (len(self.log) - 1) and
-		            msg['last_log_term'] >= self.log[len(self.log) - 1][1]))
+				(msg['term'] == self.current_term and
+					msg['last_log_idx'] > len(self.log) - 1) or
+				(msg['term'] == self.current_term and
+					msg['last_log_idx'] == (len(self.log) - 1) and
+					msg['last_log_term'] >= self.log[len(self.log) - 1][1]))
 
 		to_vote = vote and (self.voted_for is None or msg['term'] > self.current_term)
 		if to_vote:
@@ -116,7 +116,7 @@ class Replica:
 			self.last = time.time()
 
 		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': VOTE_REPLY,
-		           'term': self.current_term, 'vote': to_vote}
+				   'term': self.current_term, 'vote': to_vote}
 		reply = json.dumps(raw_msg)
 		if self.sock.send(reply):
 			v = 'Accepted' if self.voted_for else 'Denied'
@@ -143,7 +143,7 @@ class Replica:
 				else:
 					# reject new leader, remain candidate
 					raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
-					       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
+						   'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
 					reply = json.dumps(raw)
 					if self.sock.send(reply):
 						print '[%s] Rejected leader %s\n\n' % (self.id, msg['src'])
@@ -165,7 +165,7 @@ class Replica:
 			#elif len(self.log)-1 < prev_log_idx:
 			#	reply_type = FAIL
 
-			# TODO this gives an index out of bounds error
+			# TODO this gives an index out of bounds error (only when for some other reason prev_log_idx becomes -1)
 			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
 				# remove incorrect entry at prev_log_idx and any entries after
 				self.log = self.log[:prev_log_idx]
@@ -173,14 +173,24 @@ class Replica:
 			#	print '[%s] ****FAIL TO LEADER: self.log[pli][0]=%s != msg[prevlogterm]=%s' % (self.id, self.log[prev_log_idx][0], msg['prev_log_term'])
 
 			else: # logs match
-				entries = []
+				# only keep entries up to what is matched with leader
+				self.log = self.log[:prev_log_idx+1]
 				for entry in msg['entries']:
-					entries.append(tuple(entry))
+					self.log.append(tuple(entry))
+
+
+				# TODO: remove log field from msg (for now, just used for checking leader log and replica logs match exactly)
+				leader_log = []
+				for e in msg['log']:
+					leader_log.append(tuple(e))
+
+				if (self.log != leader_log):
+					print 'LOGS DO NOT MATCH: [%s] = %s  ----- leader log = %s' % (self.id, self.log, leader_log)
 
 				#print 'LOGS MATCHHHH!!!!'
 				#print '[%s] before log: %s, entries: %s, prevlogidx=%s' % (self.id, self.log, entries, prev_log_idx)
 				#print '[%s] self.log[:prev_log_idx+1] = %s' % (self.id, self.log[:prev_log_idx+1])
-				self.log = self.log[:prev_log_idx+1] + entries
+				# self.log = self.log[:prev_log_idx+1] + entries
 				#print '[%s] after log: %s' % (self.id, self.log)
 				reply_type = OK
 
@@ -188,7 +198,7 @@ class Replica:
 					self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
 
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
-			         'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
+					 'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
 			reply = json.dumps(raw)
 			#self.sock.send(reply)
 			if self.sock.send(reply):
@@ -221,14 +231,16 @@ class Replica:
 			prev_log_idx = len(self.log) - 1
 			prev_log_term = self.log[prev_log_idx][0]
 			self.log.append((self.current_term, msg))  # add client command to log
-			print 'LEADER LOG: %s' % self.log
+			# print 'LEADER LOG: %s' % self.log
+
 			for id in self.replica_ids:
 				entries = self.log[self.next_idx[id]:]
 				#print 'SENDING ENTRIES: %s' % entries
+				# TODO: remove log field
 				raw_msg = {'src': self.id, 'dst': id, 'leader': self.leader_id, 'type': APPEND_ENT,
-				           'term': self.current_term, 'prev_log_idx': prev_log_idx,
-				           'prev_log_term': prev_log_term, 'leader_commit': self.commit_idx,
-				           'entries': entries}
+						   'term': self.current_term, 'prev_log_idx': prev_log_idx,
+						   'prev_log_term': prev_log_term, 'leader_commit': self.commit_idx,
+						   'entries': entries, 'log': self.log}
 				app_ent = json.dumps(raw_msg)
 				#self.sock.send(app_ent)
 				if self.sock.send(app_ent):
@@ -237,9 +249,9 @@ class Replica:
 		else:  # new leader, initial heartbeat for log replication
 			entries = []  # log entries for the replica to store
 			raw_msg = {'src': self.id, 'dst': 'FFFF', 'leader': self.leader_id,
-			           'type': APPEND_ENT, 'term': self.current_term,
-			           'prev_log_idx': None, 'prev_log_term': None,
-			           'leader_commit': self.commit_idx, 'entries': entries}
+					   'type': APPEND_ENT, 'term': self.current_term,
+					   'prev_log_idx': None, 'prev_log_term': None,
+					   'leader_commit': self.commit_idx, 'entries': entries}
 			app_ent = json.dumps(raw_msg)
 			if self.sock.send(app_ent):
 				print '[%s] Sent heartbeat to all replicas' % self.id
@@ -254,9 +266,9 @@ class Replica:
 		entries = self.log[follower_next:]
 
 		raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
-		           'term': self.current_term, 'prev_log_idx': follower_next - 1,
-		           'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
-		           'entries': entries}
+				   'term': self.current_term, 'prev_log_idx': follower_next - 1,
+				   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
+				   'entries': entries}
 		app_ent = json.dumps(raw_msg)
 		if self.sock.send(app_ent):
 			print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
@@ -269,12 +281,15 @@ class Replica:
 		self.next_idx[follower_id] = msg['last_log_idx'] + 1
 		self.match_idx[follower_id] = msg['last_log_idx']
 
+		if msg['last_log_idx'] >= len(self.log):
+			print 'FOLLOWERS LOG LONGER THAN LEADER LOG (lastlogidx=%s >= %s)' % (msg['last_log_idx'], len(self.log))
+
 		# check for quorum of new entries
 		self.update_commit_idx()
 
 	def median_low(self, values):
 		n = len(values)
-		return sorted(values)[n/2-1]
+		return sorted(values)[n//2-1]
 
 	# check for quorum to update commit index and be able to respond to client
 	def update_commit_idx(self):
@@ -311,19 +326,19 @@ class Replica:
 
 	# Respond to a client's get message
 	def get_response(self, msg):
-	 	value = ""
-	 	if (msg['key'] in self.state_machine):
-	 		value = self.state_machine[msg['key']]
-	 	raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID'],
-	 	           'value': value}
-	 	json_msg = json.dumps(raw_msg)
-	 	if self.sock.send(json_msg):
-	 		print '[%s] get response sent to client' % (self.id)
+		value = ""
+		if (msg['key'] in self.state_machine):
+			value = self.state_machine[msg['key']]
+		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID'],
+				   'value': value}
+		json_msg = json.dumps(raw_msg)
+		if self.sock.send(json_msg):
+			print '[%s] get response sent to client' % (self.id)
 
 	# Respond to a client's put message
 	def put_response(self, msg):
-	 	self.state_machine[msg['key']] = msg['value']
-	 	raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID']}
-	 	json_msg = json.dumps(raw_msg)
-	 	if self.sock.send(json_msg):
-	 		print '[%s] put response sent to client' % (self.id)
+		self.state_machine[msg['key']] = msg['value']
+		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': 'ok', 'MID': msg['MID']}
+		json_msg = json.dumps(raw_msg)
+		if self.sock.send(json_msg):
+			print '[%s] put response sent to client' % (self.id)
