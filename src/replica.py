@@ -176,7 +176,9 @@ class Replica:
 				# only keep entries up to what is matched with leader
 				self.log = self.log[:prev_log_idx+1]
 				for entry in msg['entries']:
-					self.log.append(tuple(entry))
+					e = tuple(entry)
+					if e not in self.log:
+						self.log.append(tuple(entry))
 
 
 				# TODO: remove log field from msg (for now, just used for checking leader log and replica logs match exactly)
@@ -207,7 +209,7 @@ class Replica:
 			# reset timeout clock
 			self.last = time.time()
 
-
+	# TODO: queue client requests if no leader or election occurring, and then respond to requests with redirects
 	# respond to client with redirect message if not leader
 	def redirect_client(self, msg):
 		reply = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': REDIRECT, 'MID': msg['MID']}
@@ -227,7 +229,7 @@ class Replica:
 		#prev_log_idx = len(self.log) - 1  # index of log entry immediately preceding the new entry
 		#prev_log_term = self.log[prev_log_idx][0]
 
-		if msg != None:  # new log entries
+		if msg != None and msg not in [entry[1] for entry in self.log]:  # new log entry
 			prev_log_idx = len(self.log) - 1
 			prev_log_term = self.log[prev_log_idx][0]
 			self.log.append((self.current_term, msg))  # add client command to log
