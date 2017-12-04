@@ -67,7 +67,9 @@ while True:
 					if rep.current_state == CANDIDATE:
 						rep.tally_votes()
 				else:
-					rep.current_term = msg['term']
+					if msg['term'] > rep.current_term:
+						rep.current_term = msg['term']
+						rep.become_follower()
 
 
 	clock = time.time()

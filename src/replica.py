@@ -212,16 +212,19 @@ class Replica:
 				self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
 
 			if self.commit_idx > self.last_applied:
-				for ii in range(self.last_applied+1, self.commit_idx+1):
-					if len(self.log)-1 < ii:
-						print "ID: %s, lastapplied: %s, commitidx: %s, ii:%s, length log: %s" % (self.id, self.last_applied, self.commit_idx, ii, len(self.log))
+				#for ii in range(self.last_applied+1, self.commit_idx+1):
+				while self.last_applied+1 < self.commit_idx+1:
+					next_apply = self.last_applied+1
+					if len(self.log)-1 < next_apply:
+						print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
+						break
 					else:
-						print "ID: %s, log entry: %s" % (self.id, self.log[ii])
-					cmd = self.log[ii][1]
+						print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
+					cmd = self.log[next_apply][1]
+					self.last_applied = next_apply
 					if cmd['type'] == PUT:
 						self.state_machine[cmd['key']] = cmd['value']
 
-				self.last_applied = self.commit_idx
 
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
 					 'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
@@ -301,17 +304,20 @@ class Replica:
 		follower_id = msg['src']
 		self.next_idx[follower_id] -= 1
 		follower_next = self.next_idx[follower_id]
-		entries = self.log[follower_next:]
+		while follower_next < len(self.log):
+			a = min(follower_next+10, len(self.log))
+			entries = self.log[follower_next:a]
 
-		raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
-				   'term': self.current_term, 'prev_log_idx': follower_next - 1,
-				   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
-				   'entries': entries}
-		app_ent = json.dumps(raw_msg)
-		if len(app_ent) > 10000:
-			print "ASSUME FAILURE of %s" % (follower_id)
-		elif self.sock.send(app_ent):
-			print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
+			raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
+					   'term': self.current_term, 'prev_log_idx': follower_next - 1,
+					   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
+				  	 'entries': entries}
+			app_ent = json.dumps(raw_msg)
+			if len(app_ent) > 10000:
+				print "FAIL: ASSUME FAILURE of %s" % (follower_id)
+			elif self.sock.send(app_ent):
+				print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
+			follower_next = a
 
 
 	# handle receiving ok message from follower
