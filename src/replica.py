@@ -340,7 +340,7 @@ class Replica:
 	# higher median value
 	def median_high(self, values):
 		n = len(values)
-		return sorted(values)[n//2+1]
+		return sorted(values)[n//2]
 
 	# check for quorum to update commit index and be able to respond to client
 	def update_commit_idx(self):
