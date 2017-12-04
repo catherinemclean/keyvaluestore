@@ -113,7 +113,7 @@ class Replica:
 					msg['last_log_idx'] > len(self.log) - 1) or
 				(msg['term'] == self.current_term and
 					msg['last_log_idx'] == (len(self.log) - 1) and
-					msg['last_log_term'] >= self.log[len(self.log) - 1][1]))
+					msg['last_log_term'] >= self.log[len(self.log) - 1][0]))
 
 		self.leader_id = 'FFFF'
 		to_vote = vote and (self.voted_for is None or msg['term'] > self.current_term)
