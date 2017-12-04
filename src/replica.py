@@ -162,6 +162,7 @@ class Replica:
 			# regular heartbeat
 			else:
 				self.last = time.time()
+				reply_type = OK
 
 		# regular append_entry_rpc
 		else:
@@ -178,12 +179,14 @@ class Replica:
 
 			# TODO this gives an index out of bounds error (only when for some other reason prev_log_idx becomes -1)
 			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
+				self.current_term = msg['term']
 				# remove incorrect entry at prev_log_idx and any entries after
 				self.log = self.log[:prev_log_idx]
 				reply_type = FAIL
 			#	print '[%s] ****FAIL TO LEADER: self.log[pli][0]=%s != msg[prevlogterm]=%s' % (self.id, self.log[prev_log_idx][0], msg['prev_log_term'])
 
 			else: # logs match
+				self.current_term = msg['term']
 				# only keep entries up to what is matched with leader
 				self.log = self.log[:prev_log_idx+1]
 				for entry in msg['entries']:
@@ -208,22 +211,23 @@ class Replica:
 				reply_type = OK
 
 
-			if msg['leader_commit'] > self.commit_idx:
-				self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
+			if reply_type == OK:
+				if msg['leader_commit'] > self.commit_idx:
+					self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
 
-			if self.commit_idx > self.last_applied:
-				#for ii in range(self.last_applied+1, self.commit_idx+1):
-				while self.last_applied+1 < self.commit_idx+1:
-					next_apply = self.last_applied+1
-					if len(self.log)-1 < next_apply:
-						print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
-						break
-					else:
-						print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
-					cmd = self.log[next_apply][1]
-					self.last_applied = next_apply
-					if cmd['type'] == PUT:
-						self.state_machine[cmd['key']] = cmd['value']
+				if self.commit_idx > self.last_applied:
+					#for ii in range(self.last_applied+1, self.commit_idx+1):
+					while self.last_applied+1 < self.commit_idx+1:
+						next_apply = self.last_applied+1
+						if len(self.log)-1 < next_apply:
+							print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
+							break
+						else:
+							print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
+						cmd = self.log[next_apply][1]
+						self.last_applied = next_apply
+						if cmd['type'] == PUT:
+							self.state_machine[cmd['key']] = cmd['value']
 
 
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,

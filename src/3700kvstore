@@ -44,8 +44,9 @@ while True:
 			elif msg_type == FAIL:
 				rep.handle_fail(msg)
 
-			elif msg_type == VOTE_REPLY:
-				continue # if already leader, could just be delayed vote, so just ignore
+			elif msg_type == VOTE_REPLY and msg['term'] > rep.current_term:
+				# continue # if already leader, could just be delayed vote, so just ignore
+				rep.become_follower()
 
 			elif msg_type == VOTE_REQ:
 				rep.become_follower()
