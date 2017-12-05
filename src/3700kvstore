@@ -45,11 +45,13 @@ while True:
 				rep.handle_fail(msg)
 
 			elif msg_type == VOTE_REPLY and msg['term'] > rep.current_term:
-				# continue # if already leader, could just be delayed vote, so just ignore
-				rep.become_follower()
+				rep.current_term = msg['term']
+				continue # if already leader, could just be delayed vote, so just ignore
+				#rep.become_follower()
 
 			elif msg_type == VOTE_REQ:
 				rep.become_follower()
+				rep.handle_vote_request(msg)
 
 
 		else: # either follower or candidate
@@ -70,7 +72,7 @@ while True:
 				else:
 					if msg['term'] > rep.current_term:
 						rep.current_term = msg['term']
-						rep.become_follower()
+						#rep.become_follower()
 
 
 	clock = time.time()

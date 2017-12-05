@@ -81,6 +81,7 @@ class Replica:
 			self.next_idx = {}
 			self.match_idx = {}
 			self.append_last = 0
+			self.voted_for = None
 
 		self.current_state = FOLLOWER
 
@@ -108,19 +109,16 @@ class Replica:
 
 	# Determine if vote will be granted to candidate and send vote response back to candidate
 	def handle_vote_request(self, msg):
-		vote = (msg['term'] > self.current_term or
-				(msg['term'] == self.current_term and
-					msg['last_log_idx'] > len(self.log) - 1) or
-				(msg['term'] == self.current_term and
-					msg['last_log_idx'] == (len(self.log) - 1) and
-					msg['last_log_term'] >= self.log[len(self.log) - 1][1]))
+		vote = (msg['term'] >= self.current_term and msg['last_log_idx'] > len(self.log) - 1) or (msg['term'] >= self.current_term and msg['last_log_idx'] == (len(self.log) - 1) and msg['last_log_term'] >= self.log[len(self.log) - 1][0])
 
 		self.leader_id = 'FFFF'
 		to_vote = vote and (self.voted_for is None or msg['term'] > self.current_term)
 		if to_vote:
 			self.voted_for = msg['candidate_id']
-			self.current_term = msg['term']
 			self.last = time.time()
+
+		if self.current_term < msg['term']:
+			self.current_term = msg['term']
 
 		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': VOTE_REPLY,
 				   'term': self.current_term, 'vote': to_vote}
@@ -306,8 +304,9 @@ class Replica:
 
 		# decrement and retry sending append_ent msg to that follower
 		follower_id = msg['src']
-		self.next_idx[follower_id] -= 1
-		follower_next = self.next_idx[follower_id]
+		#self.next_idx[follower_id] -= 1
+		#follower_next = self.next_idx[follower_id]
+		follower_next = msg['last_log_idx'] + 1
 		while follower_next < len(self.log):
 			a = min(follower_next+10, len(self.log))
 			entries = self.log[follower_next:a]
