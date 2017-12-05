@@ -53,6 +53,11 @@ while True:
 				rep.become_follower()
 				rep.handle_vote_request(msg)
 
+			elif msg_type == APPEND_ENT:
+				if (msg['term'] > rep.current_term):
+					rep.become_follower()
+					rep.recv_append_ent(msg)
+
 
 		else: # either follower or candidate
 			# Redirect get() and put() from clients to leader

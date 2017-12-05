@@ -83,6 +83,7 @@ class Replica:
 			self.append_last = 0
 			self.voted_for = None
 
+		self.leader_id = 'FFFF'
 		self.current_state = FOLLOWER
 		print "ID %s becoming a follower" % (self.id)
 
@@ -165,6 +166,8 @@ class Replica:
 
 		# regular append_entry_rpc
 		else:
+			if self.leader_id == 'FFFF':
+				self.leader_id = msg['leader']
 			print '[%s] Received appendEntryRPC' % (self.id)
 			print '[%s] Received entries: %s' % (self.id, msg['entries'])
 			prev_log_idx = msg['prev_log_idx']
