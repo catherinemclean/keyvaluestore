@@ -119,6 +119,7 @@ class Replica:
 			if self.current_state == CANDIDATE:
 				self.become_follower()
 			self.voted_for = msg['candidate_id']
+			self.current_state = FOLLOWER
 			self.last = time.time()
 
 		if self.current_term < msg['term']:
@@ -164,21 +165,21 @@ class Replica:
 			# regular heartbeat
 			else:
 				self.leader_id = msg['leader']
+				print '[%s] received heartbeat from %s' % (self.id, self.leader_id)
 				self.last = time.time()
 				reply_type = OK
 
 		# regular append_entry_rpc
 		else:
-			#if self.leader_id == 'FFFF':
-			self.leader_id = msg['leader']
-			print '[%s] Received appendEntryRPC' % (self.id)
-			print '[%s] Received entries: %s' % (self.id, msg['entries'])
+			if self.leader_id == 'FFFF':
+				self.leader_id = msg['leader']
+			#print '[%s] Received appendEntryRPC' % (self.id)
+			#print '[%s] Received entries: %s' % (self.id, msg['entries'])
 			prev_log_idx = msg['prev_log_idx']
 
 			if msg['term'] < self.current_term or prev_log_idx > len(self.log)-1:
 				reply_type = FAIL
-				print '[%s] ****FAIL TO LEADER: lterm=%s < cur_term=%s ? OR prevlogidx=%s >= len(self.log)=%s ?' % (self.id, msg['term'], self.current_term, prev_log_idx, len(self.log))
-
+				print '[%s] FAIL TO LEADER %s: lterm=%s < cur_term=%s ? OR prevlogidx=%s >= len(self.log)=%s ?' % (self.id, self.leader_id, msg['term'], self.current_term, prev_log_idx, len(self.log))
 			#elif len(self.log)-1 < prev_log_idx:
 			#	reply_type = FAIL
 
@@ -191,6 +192,7 @@ class Replica:
 			#	print '[%s] ****FAIL TO LEADER: self.log[pli][0]=%s != msg[prevlogterm]=%s' % (self.id, self.log[prev_log_idx][0], msg['prev_log_term'])
 
 			else: # logs match
+				print '[%s] LOGS MATCHHHHH at %s' % (self.id, msg['prev_log_idx'])
 				self.current_term = msg['term']
 				# only keep entries up to what is matched with leader
 				self.log = self.log[:prev_log_idx+1]
@@ -228,8 +230,8 @@ class Replica:
 						if len(self.log)-1 < next_apply:
 							print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
 							break
-						else:
-							print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
+						#else:
+							#print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
 						cmd = self.log[next_apply][1]
 						self.last_applied = next_apply
 						self.commit_idx += 1
@@ -240,9 +242,9 @@ class Replica:
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
 					 'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
 			reply = json.dumps(raw)
-			#self.sock.send(reply)
-			if self.sock.send(reply):
-				print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
+			self.sock.send(reply)
+			#if self.sock.send(reply):
+			#	print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
 
 			# reset timeout clock
 			self.last = time.time()
@@ -253,6 +255,11 @@ class Replica:
 		if self.leader_id == 'FFFF':
 			self.msgs_to_redirect.append(msg)
 			return
+		
+		if self.leader_id == self.id:
+			print '[%s] TRYING TO REDIRECT TO SELF' % self.id
+			exit(1)		
+
 		reply = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': REDIRECT, 'MID': msg['MID']}
 		json_reply = json.dumps(reply)
 		if self.sock.send(json_reply):
@@ -288,8 +295,10 @@ class Replica:
 				#self.sock.send(app_ent)
 				if len(app_ent) > 10000:
 					print "ASSUME FAILURE of %s" % (id)
-				elif self.sock.send(app_ent):
-					print '[%s] Sent append_entry_rpc to follower %s' % (self.id, id)
+				else:
+					self.sock.send(app_ent)
+			#	elif self.sock.send(app_ent):
+			#		print '[%s] Sent append_entry_rpc to follower %s' % (self.id, id)
 
 		else:  # new leader, initial heartbeat for log replication
 			entries = []  # log entries for the replica to store
@@ -298,10 +307,10 @@ class Replica:
 					   'prev_log_idx': None, 'prev_log_term': None,
 					   'leader_commit': self.commit_idx, 'entries': entries}
 			app_ent = json.dumps(raw_msg)
-			#if len(app_ent) > 30000:
-				#print "ASSUME FAILURE of %s" % (follower_id)
+			if len(app_ent) > 10000:
+				print "ASSUME FAILURE 2 of %s" % (follower_id)
 			if self.sock.send(app_ent):
-				print '[%s] Sent heartbeat to all replicas' % self.id
+				print '[%s] Term %s: Sent heartbeat to all replicas' % (self.id, self.current_term)
 
 
 	# handle receiving failed message from follower
@@ -315,6 +324,7 @@ class Replica:
 		follower_id = msg['src']
 		#self.next_idx[follower_id] -= 1
 		#follower_next = self.next_idx[follower_id]
+		self.next_idx[follower_id] = msg['last_log_idx'] + 1
 		follower_next = msg['last_log_idx'] + 1
 		self.next_idx[follower_id] = follower_next
 		while follower_next < len(self.log):
