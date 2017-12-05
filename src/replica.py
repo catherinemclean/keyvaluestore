@@ -315,7 +315,7 @@ class Replica:
 		follower_id = msg['src']
 		#self.next_idx[follower_id] -= 1
 		#follower_next = self.next_idx[follower_id]
-		follower_next = msg['last_log_idx'] + 1
+		follower_next = min(self.next_idx[follower_id], msg['last_log_idx'] + 1)
 		self.next_idx[follower_id] = follower_next
 		while follower_next < len(self.log):
 			a = min(follower_next+75, len(self.log))
