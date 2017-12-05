@@ -116,6 +116,8 @@ class Replica:
 		self.leader_id = 'FFFF'
 		to_vote = vote and (self.voted_for is None or msg['term'] > self.current_term)
 		if to_vote:
+			if self.current_state == CANDIDATE:
+				self.become_follower()
 			self.voted_for = msg['candidate_id']
 			self.last = time.time()
 
@@ -161,13 +163,14 @@ class Replica:
 
 			# regular heartbeat
 			else:
+				self.leader_id = msg['leader']
 				self.last = time.time()
 				reply_type = OK
 
 		# regular append_entry_rpc
 		else:
-			if self.leader_id == 'FFFF':
-				self.leader_id = msg['leader']
+			#if self.leader_id == 'FFFF':
+			self.leader_id = msg['leader']
 			print '[%s] Received appendEntryRPC' % (self.id)
 			print '[%s] Received entries: %s' % (self.id, msg['entries'])
 			prev_log_idx = msg['prev_log_idx']
@@ -193,8 +196,8 @@ class Replica:
 				self.log = self.log[:prev_log_idx+1]
 				for entry in msg['entries']:
 					e = tuple(entry)
-					if e not in self.log:
-						self.log.append(tuple(entry))
+					#if e not in self.log:
+					self.log.append(tuple(entry))
 
 
 				# TODO: remove log field from msg (for now, just used for checking leader log and replica logs match exactly)
@@ -313,8 +316,9 @@ class Replica:
 		#self.next_idx[follower_id] -= 1
 		#follower_next = self.next_idx[follower_id]
 		follower_next = msg['last_log_idx'] + 1
+		self.next_idx[follower_id] = follower_next
 		while follower_next < len(self.log):
-			a = min(follower_next+10, len(self.log))
+			a = min(follower_next+75, len(self.log))
 			entries = self.log[follower_next:a]
 
 			raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
@@ -322,9 +326,9 @@ class Replica:
 					   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
 				  	 'entries': entries}
 			app_ent = json.dumps(raw_msg)
-			if len(app_ent) > 10000:
+			if len(app_ent) > 20000:
 				print "FAIL: ASSUME FAILURE of %s" % (follower_id)
-			elif self.sock.send(app_ent):
+			if self.sock.send(app_ent):
 				print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
 			follower_next = a
 
