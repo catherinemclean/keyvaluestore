@@ -84,6 +84,7 @@ class Replica:
 			self.voted_for = None
 
 		self.current_state = FOLLOWER
+		print "ID %s becoming a follower" % (self.id)
 
 
 	# Increment votes and check if election won (assumed current state candidate)
@@ -210,12 +211,13 @@ class Replica:
 
 
 			if reply_type == OK:
+				temp_commit_idx = 0
 				if msg['leader_commit'] > self.commit_idx:
-					self.commit_idx = min(msg['leader_commit'], len(self.log) - 1)
+					temp_commit_idx = min(msg['leader_commit'], len(self.log) - 1)
 
-				if self.commit_idx > self.last_applied:
+				if temp_commit_idx > self.last_applied:
 					#for ii in range(self.last_applied+1, self.commit_idx+1):
-					while self.last_applied+1 < self.commit_idx+1:
+					while self.last_applied+1 < temp_commit_idx+1:
 						next_apply = self.last_applied+1
 						if len(self.log)-1 < next_apply:
 							print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
@@ -224,6 +226,7 @@ class Replica:
 							print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
 						cmd = self.log[next_apply][1]
 						self.last_applied = next_apply
+						self.commit_idx += 1
 						if cmd['type'] == PUT:
 							self.state_machine[cmd['key']] = cmd['value']
 
@@ -353,15 +356,17 @@ class Replica:
 		else:
 			highest_quorum_idx = median(self.match_idx.values())
 
+		temp_commit_idx = self.commit_idx
 		# new log entry has been committed
-		if highest_quorum_idx > self.commit_idx:
+		if highest_quorum_idx > temp_commit_idx:
 			print 'commit_idx=%s, highest_quorum_idx=%s, so now range(commitidx+1=%s, hqi+1=%s)' % (self.commit_idx, highest_quorum_idx, self.commit_idx+1, highest_quorum_idx+1)
 			print 'next_idx=%s, match_idx= %s' % (self.next_idx, self.match_idx)
 			#print 'LEADER LOG: %s' % self.log
-			for ii in range(self.commit_idx+1, highest_quorum_idx+1):
+			for ii in range(temp_commit_idx+1, highest_quorum_idx+1):
 				self.respond_to_client(ii)
+				self.commit_idx += 1
 
-			self.commit_idx = highest_quorum_idx
+			#self.commit_idx = highest_quorum_idx
 
 	# apply command to state machine and send response to client
 	# @param idx: the log index of the command being responded to
