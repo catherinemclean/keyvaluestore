@@ -26,14 +26,6 @@ while True:
 		msg = json.loads(msg_raw)
 		msg_type = msg['type']
 
-		'''
-		TODO: GENERAL FOR ALL SERVERS:
-			- If commitIndex > lastApplied: increment lastApplied, apply
-				log[lastApplied] to state machine (5.3)
-			- If RPC request or response contains term T > currentTerm:
-				set currentTerm = T, convert to follower (5.1)
-		'''
-
 		if rep.current_state == LEADER:
 			if msg_type in [GET, PUT]:
 				rep.send_append_ent(msg)
