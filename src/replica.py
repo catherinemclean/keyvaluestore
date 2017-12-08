@@ -20,7 +20,8 @@ class Replica:
 		self.last_applied = 0   # index of highest log entry applied to state machine (initialized to 0, increases monotonically)
 		self.state_machine = {} # actual key-value store
 		self.votes = 0          # number of votes received if candidate
-		self.msgs_to_redirect = []		
+		self.msgs_to_redirect = []	
+		self.leader_confirmed = False	
 
 		# Setup socket
 		self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -113,6 +114,7 @@ class Replica:
 	def handle_vote_request(self, msg):
 		# change leader to FFFF (meaning no current leader)
 		self.leader_id = 'FFFF'
+		self.leader_confirmed = False
 
 		# grant vote if candidate has >= term and longer log, 
 		# or >= term and same length log but last entry has > term than my last entry's term
@@ -166,9 +168,9 @@ class Replica:
 			# received initial heartbeat from new leader
 			if self.voted_for != None:
 				# verify that leader is acceptable leader
-				leader_ok = ((term >= self.current_term and msg['last_log_idx'] > len(self.log) - 1) or
-				            (term >= self.current_term and msg['last_log_idx'] == (len(self.log) - 1) 
-				             and msg['last_log_term'] >= self.log[len(self.log) - 1][0]))
+				leader_ok = ((term >= self.current_term and msg['prev_log_idx'] > len(self.log) - 1) or
+				            (term >= self.current_term and msg['prev_log_idx'] == (len(self.log) - 1) 
+				             and msg['prev_log_term'] >= self.log[len(self.log) - 1][0]))
 				if leader_ok:
 					print '[%s] New leader: %s' % (self.id, msg['leader'])
 					# become follower if not already
@@ -185,10 +187,10 @@ class Replica:
 					self.last = time.time()
 					
 					# redirect any queued messages received during election
-					if self.msgs_to_redirect != []:
-						for m in self.msgs_to_redirect:
-							self.redirect_client(m)
-						self.msgs_to_redirect = []
+					#if self.msgs_to_redirect != []:
+					#	for m in self.msgs_to_redirect:
+					#		self.redirect_client(m)
+					#	self.msgs_to_redirect = []
 
 						
 				else:
@@ -205,12 +207,14 @@ class Replica:
 
 			# regular heartbeat from established leader
 			else:
+				self.leader_confirmed = True
 				# update term if necessary
 				if term > self.current_term:
 					self.current_term = term
 					
 				if self.leader_id != msg['leader']:
-					print '[%s] Received heartbeat from %s but leader = %s' % (self.id, msg['leader'], self.leader_id)
+					self.leader_id = msg['leader']
+					#print '[%s] Received heartbeat from %s but leader = %s' % (self.id, msg['leader'], self.leader_id)
 
 				reply_type = OK
 				# reset timeout
@@ -220,9 +224,15 @@ class Replica:
 		# regular append entries
 		else:
 			if self.leader_id == 'FFFF':
-				print '[%s] Received entries from %s but leader still set to FFFF' % (self.id, msg['src'])
-
+				self.leader_id = msg['leader']
+				#print '[%s] Received entries from %s but leader still set to FFFF' % (self.id, msg['src'])
 			prev_log_idx = msg['prev_log_idx']
+
+			#redirect any queued messages received during election
+                        if self.msgs_to_redirect != []:
+                                for m in self.msgs_to_redirect:
+                                        self.redirect_client(m)
+                                self.msgs_to_redirect = []
 
 			# leader's term < current_term or prev_log_idx throws index error
 			if term < self.current_term or prev_log_idx > len(self.log) - 1:
@@ -404,7 +414,7 @@ class Replica:
 				prev_log_term = self.log[prev_log_idx][0]
 
 				# send maximum of 25 entries at once
-				num_entries = min(len(self.log), self.next_idx[rid]+26)
+				num_entries = min(len(self.log), self.next_idx[rid]+51)
 				entries = self.log[self.next_idx[rid]:num_entries]
 
 				raw_msg = {'src': self.id, 'dst': rid, 'leader': self.leader_id, 'type': APPEND_ENT,
@@ -418,7 +428,7 @@ class Replica:
 		else:
 			raw_msg = {'src': self.id, 'dst': 'FFFF', 'leader': self.leader_id,
 					   'type': APPEND_ENT, 'term': self.current_term,
-					   'prev_log_idx': None, 'prev_log_term': None,
+					   'prev_log_idx': len(self.log)-1, 'prev_log_term': self.log[len(self.log)-1][0],
 					   'leader_commit': self.commit_idx, 'entries': []}
 			app_ent = json.dumps(raw_msg)
 			if self.sock.send(app_ent):
@@ -465,7 +475,7 @@ class Replica:
 		if len(self.log) - self.match_idx[follower_id] > 25:
 			# log replication (replica many log entries behind leader)
 			follower_next = self.next_idx[follower_id]
-			num_entries = min(len(self.log), follower_next + 26)
+			num_entries = min(len(self.log), follower_next + 51)
 
 			entries = self.log[follower_next:num_entries]
 			raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
