@@ -74,16 +74,19 @@ class Replica:
 		for rid in self.replica_ids:
 			self.next_idx[rid] = len(self.log)  # initialized to leader's last log index + 1
 			self.match_idx[rid] = 0  # initialized to 0
-			self.last_heard_from[rid] = time.time() # assume all replicas reachable
+			self.last_heard_from[rid] = 0 #time.time()
 
 		# send heartbeat
-		self.send_append_ent()
+		#self.send_append_ent()
 
 		if self.msgs_to_redirect != []:
 			for m in self.msgs_to_redirect:
 				# TODO: check for duplicates?
 				self.send_append_ent(m)
 			self.msgs_to_redirect = []
+
+		# send heartbeat
+                self.send_append_ent()
 
 	# Change state to follower if candidate and lost election or if leader and received vote request
 	# Assumes term has already been updated (and that is what triggered method call)
@@ -179,7 +182,7 @@ class Replica:
 		if self.current_term > term:
 			# reject RPC
 			raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
-			       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
+			       'type': FAIL, 'term': self.current_term, 'last_log_idx': len(self.log)-1}
 			reply = json.dumps(raw)
 			if self.sock.send(reply):
 				print '[%s] Rejected AppendEntryRPC from %s\n\n' % (self.id, msg['src'])
@@ -303,7 +306,7 @@ class Replica:
 				stale+=1
 
 		print '[%s] STALE followers: %s/%s' % (self.id, stale, (len(self.replica_ids)//2))
-		return stale >= (len(self.replica_ids)//2)
+		return stale > (len(self.replica_ids)//2)
 	
 	# add client command to log and send appropriate entries to each replica
 	# no msg means send heartbeat
@@ -348,13 +351,15 @@ class Replica:
 	def handle_fail(self, msg):
 		term = msg['term']
 
-		# step down from leader if receive response with higher term
-		if self.update_term(term):
+		# step down from leader if receive response with higher term (from replica not stale)
+		if self.update_term(term) and time.time() - self.last_heard_from[msg['src']] < .35:
 			# reset leader_id to prepare for election
+			print '[%s] Becoming follower because %s had better term and heard from recently' % (self.id, msg['src'])
 			self.become_follower()
 			self.leader_id = 'FFFF'
 			return
 
+		assert(self.update_term(term) == False)
 		follower_id = msg['src']
 		# update next_idx to be one less than previous next_idx or replica's last idx +1
 		self.next_idx[follower_id] = min(self.next_idx[follower_id]-1, msg['last_log_idx']+1)

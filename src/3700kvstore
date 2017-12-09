@@ -25,7 +25,7 @@ while True:
 		if len(msg_raw) == 0: continue
 		msg = json.loads(msg_raw)
 		msg_type = msg['type']
-		term = msg['term']
+		term = msg.get('term', None)
 
 		if rep.current_state == LEADER:
 			if msg_type in [GET, PUT]:
@@ -40,6 +40,7 @@ while True:
 			# vote reply from replica with greater term ==> rightful leader just last to respond to vote request, still become follower
 			elif msg_type == VOTE_REPLY and rep.update_term(term):
 				# continue # if already leader, could just be delayed vote, so just ignore
+				print '[%s] msg_type == VOTE_REPLY and rep.update_term(term): CURRENT STATE LEADER' % rep.id
 				rep.become_follower()
 				rep.leader_id = 'FFFF'
 
@@ -48,7 +49,8 @@ while True:
 					rep.become_follower()
 					rep.leader_id = 'FFFF'
 					rep.handle_vote_request(msg)
-				# else: TODO update term and remain leader
+				 #else: #TODO update term and remain leader
+					
 
 			# APPEND_ENT msg type and better term
 			elif msg_type == APPEND_ENT and rep.update_term(term):
