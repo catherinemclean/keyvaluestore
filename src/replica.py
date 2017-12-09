@@ -20,8 +20,7 @@ class Replica:
 		self.last_applied = 0   # index of highest log entry applied to state machine (initialized to 0, increases monotonically)
 		self.state_machine = {} # actual key-value store
 		self.votes = 0          # number of votes received if candidate
-		self.msgs_to_redirect = []	
-		self.leader_confirmed = False	
+		self.msgs_to_redirect = []
 
 		# Setup socket
 		self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -37,10 +36,19 @@ class Replica:
 		self.next_idx = {}      # for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
 		self.match_idx = {}     # for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 		self.append_last = 0    # time when last append_entry RPC was sent
-		
+		self.last_heard_from = {} # for each server, time when last response was received
+
 		# Timeout vars
 		self.election_timeout = decimal.Decimal(random.randint(150, 300)) / 1000
 		self.last = time.time() # time when last append_entry RPC was received from leader
+
+	# update term if > current term and return True
+	def update_term(self, term):
+		if term > self.current_term:
+			self.current_term = term
+			return True
+
+		return False
 
 
 	# Change state to candidate and request votes from other replicas
@@ -63,28 +71,37 @@ class Replica:
 		self.leader_id = self.id
 
 		# reset/initialize nextIndex and matchIndex
-		for id in self.replica_ids:
-			self.next_idx[id] = len(self.log)  # initialized to leader's last log index + 1
-			self.match_idx[id] = 0  # initialized to 0
+		for rid in self.replica_ids:
+			self.next_idx[rid] = len(self.log)  # initialized to leader's last log index + 1
+			self.match_idx[rid] = 0  # initialized to 0
+			self.last_heard_from[rid] = time.time() # assume all replicas reachable
 
 		# send heartbeat
 		self.send_append_ent()
 
 		if self.msgs_to_redirect != []:
 			for m in self.msgs_to_redirect:
+				# TODO: check for duplicates?
 				self.send_append_ent(m)
 			self.msgs_to_redirect = []
 
 	# Change state to follower if candidate and lost election or if leader and received vote request
+	# Assumes term has already been updated (and that is what triggered method call)
 	def become_follower(self):
+		# reset leader-specific vars to defaults
 		if self.current_state == LEADER:
-			# reset leader-specific vars to defaults
 			self.next_idx = {}
 			self.match_idx = {}
 			self.append_last = 0
+			self.last_heard_from = {}
 			self.voted_for = None
 
-		self.leader_id = 'FFFF'
+		# reset voting vars
+		if self.current_state == CANDIDATE:
+			self.votes = 0
+			self.voted_for = None
+
+		# TODO: must reset leader_id after wherever this is called
 		self.current_state = FOLLOWER
 		print "ID %s becoming a follower" % (self.id)
 
@@ -114,7 +131,6 @@ class Replica:
 	def handle_vote_request(self, msg):
 		# change leader to FFFF (meaning no current leader)
 		self.leader_id = 'FFFF'
-		self.leader_confirmed = False
 
 		# grant vote if candidate has >= term and longer log, 
 		# or >= term and same length log but last entry has > term than my last entry's term
@@ -125,12 +141,8 @@ class Replica:
 		
 		if to_vote:				
 			self.voted_for = msg['candidate_id']
-			self.current_state = FOLLOWER
+			# self.current_state = FOLLOWER
 			self.last = time.time()
-
-		# update term regardless if replica voted for candidate or not
-		if self.current_term < msg['term']:
-			self.current_term = msg['term']
 
 		raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': 'FFFF', 'type': VOTE_REPLY,
 				   'term': self.current_term, 'vote': to_vote}
@@ -163,58 +175,56 @@ class Replica:
 		term = msg['term']
 		reply_type = None
 
+		# all replicas reject RPC if term < current_term, regardless of its current_state
+		if self.current_term > term:
+			# reject RPC
+			raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
+			       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
+			reply = json.dumps(raw)
+			if self.sock.send(reply):
+				print '[%s] Rejected AppendEntryRPC from %s\n\n' % (self.id, msg['src'])
+
+			return
+
+
+		if self.current_state == LEADER:
+			self.update_term(term)
+			self.become_follower()
+			self.leader_id = msg['leader']
+
+		if self.current_state == CANDIDATE:
+			self.update_term(term)
+			self.become_follower()
+
+
 		# received heartbeat
 		if msg['entries'] == []:
+			self.update_term(term)
+
 			# received initial heartbeat from new leader
 			if self.voted_for != None:
-				# verify that leader is acceptable leader
-				leader_ok = ((term >= self.current_term and msg['prev_log_idx'] > len(self.log) - 1) or
-				            (term >= self.current_term and msg['prev_log_idx'] == (len(self.log) - 1) 
-				             and msg['prev_log_term'] >= self.log[len(self.log) - 1][0]))
-				if leader_ok:
-					print '[%s] New leader: %s' % (self.id, msg['leader'])
-					# become follower if not already
-					if self.current_state != FOLLOWER:
-						self.become_follower()
+				print '[%s] New leader: %s' % (self.id, msg['leader'])
 
-					# reset voting info
-					self.voted_for = None
-					self.votes = 0
-					# set leader_id and term
-					self.leader_id = msg['leader']
-					self.current_term = term
-					# reset timeout 
-					self.last = time.time()
+				# reset voting info
+				self.voted_for = None
+				self.votes = 0
+				# set leader_id
+				self.leader_id = msg['leader']
+				# reset timeout
+				self.last = time.time()
 					
-					# redirect any queued messages received during election
-					#if self.msgs_to_redirect != []:
-					#	for m in self.msgs_to_redirect:
-					#		self.redirect_client(m)
-					#	self.msgs_to_redirect = []
+				# redirect any queued messages received during election
+				if self.msgs_to_redirect != []:
+					for m in self.msgs_to_redirect:
+						self.redirect_client(m)
+					self.msgs_to_redirect = []
 
-						
-				else:
-					# update term if necessary
-					if term > self.current_term:
-						self.current_term = term
-						
-					# reject new leader and send FAIL response
-					raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
-					       'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
-					reply = json.dumps(raw)
-					if self.sock.send(reply):
-						print '[%s] Rejected leader %s\n\n' % (self.id, msg['src'])
 
 			# regular heartbeat from established leader
 			else:
-				self.leader_confirmed = True
-				# update term if necessary
-				if term > self.current_term:
-					self.current_term = term
-					
 				if self.leader_id != msg['leader']:
 					self.leader_id = msg['leader']
-					#print '[%s] Received heartbeat from %s but leader = %s' % (self.id, msg['leader'], self.leader_id)
+					print '[%s] Received heartbeat from %s but leader = %s' % (self.id, msg['leader'], self.leader_id)
 
 				reply_type = OK
 				# reset timeout
@@ -223,35 +233,24 @@ class Replica:
 
 		# regular append entries
 		else:
+			self.update_term(term)
 			if self.leader_id == 'FFFF':
 				self.leader_id = msg['leader']
-				#print '[%s] Received entries from %s but leader still set to FFFF' % (self.id, msg['src'])
+				print '[%s] Received entries from %s but leader still set to FFFF' % (self.id, msg['src'])
+
 			prev_log_idx = msg['prev_log_idx']
-
-			#redirect any queued messages received during election
-                        if self.msgs_to_redirect != []:
-                                for m in self.msgs_to_redirect:
-                                        self.redirect_client(m)
-                                self.msgs_to_redirect = []
-
 			# leader's term < current_term or prev_log_idx throws index error
 			if term < self.current_term or prev_log_idx > len(self.log) - 1:
 				reply_type = FAIL
 
 			# entry at prev_log_idx doesn't match leader's entry
 			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
-				# update term (leader has either >= term)
-				self.current_term = term
-				
 				# remove incorrect entry at prev_log_idx and any entries after
 				self.log = self.log[:prev_log_idx]
 				reply_type = FAIL
 
 			# logs match
 			else:
-				# update term
-				self.current_term = term
-
 				# only keep entries up to what is matched with leader
 				self.log = self.log[:prev_log_idx + 1]
 				for entry in msg['entries']:
@@ -267,8 +266,6 @@ class Replica:
 			       'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
 			reply = json.dumps(raw)
 			self.sock.send(reply)
-			# if self.sock.send(reply):
-			#	print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
 
 			# reset timeout clock
 			self.last = time.time()
@@ -277,105 +274,6 @@ class Replica:
 		if reply_type == OK and msg['leader_commit'] > self.commit_idx:
 			self.apply_commited(msg['leader_commit'])
 
-
-	'''
-	# AppendEntry RPC receiver implementation
-	def recv_append_ent2(self, msg):
-		if msg['entries'] == []:
-			# initial heartbeat from new leader
-			if self.voted_for != None:
-				if msg['term'] >= self.current_term:
-					# acceptable new leader
-					print '[%s] New leader: %s' % (self.id, msg['leader'])
-					if self.current_state == CANDIDATE:
-						self.current_state = FOLLOWER
-
-					self.voted_for = None
-					self.votes = 0
-					self.leader_id = msg['leader']
-					self.current_term = msg['term']
-					self.last = time.time()
-					if self.msgs_to_redirect != []:
-						for m in self.msgs_to_redirect:
-							self.redirect_client(m)
-						self.msgs_to_redirect = []
-
-				else:
-					# reject new leader, remain candidate
-					raw = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id,
-						   'type': FAIL, 'term': self.current_term, 'last_log_idx': None}
-					reply = json.dumps(raw)
-					if self.sock.send(reply):
-						print '[%s] Rejected leader %s\n\n' % (self.id, msg['src'])
-
-			# regular heartbeat
-			else:
-				self.leader_id = msg['leader']
-				print '[%s] received heartbeat from %s' % (self.id, self.leader_id)
-				self.last = time.time()
-				reply_type = OK
-
-		# regular append_entry_rpc
-		else:
-			if self.leader_id == 'FFFF':
-				self.leader_id = msg['leader']
-			#print '[%s] Received appendEntryRPC' % (self.id)
-			#print '[%s] Received entries: %s' % (self.id, msg['entries'])
-			prev_log_idx = msg['prev_log_idx']
-
-			if msg['term'] < self.current_term or prev_log_idx > len(self.log)-1:
-				reply_type = FAIL
-
-			elif self.log[prev_log_idx][0] != msg['prev_log_term']:
-				self.current_term = msg['term']
-				# remove incorrect entry at prev_log_idx and any entries after
-				self.log = self.log[:prev_log_idx]
-				reply_type = FAIL
-
-			else: # logs match
-				print '[%s] LOGS MATCHHHHH at %s' % (self.id, msg['prev_log_idx'])
-				self.current_term = msg['term']
-				# only keep entries up to what is matched with leader
-				self.log = self.log[:prev_log_idx+1]
-				for entry in msg['entries']:
-					e = tuple(entry)
-					#if e not in self.log:
-					self.log.append(tuple(entry))
-					
-				reply_type = OK
-
-
-			if reply_type == OK:
-				temp_commit_idx = 0
-				if msg['leader_commit'] > self.commit_idx:
-					temp_commit_idx = min(msg['leader_commit'], len(self.log) - 1)
-
-				if temp_commit_idx > self.last_applied:
-					#for ii in range(self.last_applied+1, self.commit_idx+1):
-					while self.last_applied+1 < temp_commit_idx+1:
-						next_apply = self.last_applied+1
-						if len(self.log)-1 < next_apply:
-							print "bananas ID: %s, lastapplied: %s, commitidx: %s,length log: %s" % (self.id, self.last_applied, self.commit_idx, len(self.log))
-							break
-						#else:
-							#print "ID: %s, log entry: %s" % (self.id, self.log[next_apply])
-						cmd = self.log[next_apply][1]
-						self.last_applied = next_apply
-						self.commit_idx += 1
-						if cmd['type'] == PUT:
-							self.state_machine[cmd['key']] = cmd['value']
-
-
-			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
-					 'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
-			reply = json.dumps(raw)
-			self.sock.send(reply)
-			#if self.sock.send(reply):
-			#	print '[%s] Sent %s to leader %s' % (self.id, reply_type, self.leader_id)
-
-			# reset timeout clock
-			self.last = time.time()
-		'''
 
 	# TODO: queue client requests if no leader or election occurring, and then respond to requests with redirects
 	# respond to client with redirect message if not leader
@@ -395,6 +293,17 @@ class Replica:
 
 
 	# LEADER SPECIFIC METHODS
+
+	# check if have received response from at least half of followers within past .35 s
+	def check_stale_followers(self):
+		stale = 0
+		now = time.time()
+		for t in self.last_heard_from.values():
+			if now - t >= .35:
+				stale+=1
+
+		print '[%s] STALE followers: %s/%s' % (self.id, stale, (len(self.replica_ids)//2))
+		return stale >= (len(self.replica_ids)//2)
 	
 	# add client command to log and send appropriate entries to each replica
 	# no msg means send heartbeat
@@ -437,10 +346,13 @@ class Replica:
 
 	# handle receiving failed message from follower
 	def handle_fail(self, msg):
+		term = msg['term']
+
 		# step down from leader if receive response with higher term
-		if msg['term'] > self.current_term:
-			self.current_term = msg['term']
+		if self.update_term(term):
+			# reset leader_id to prepare for election
 			self.become_follower()
+			self.leader_id = 'FFFF'
 			return
 
 		follower_id = msg['src']
@@ -456,10 +368,12 @@ class Replica:
 		           'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
 		           'entries': entries}
 		app_ent = json.dumps(raw_msg)
-		if len(app_ent) > 20000:
-			print "FAIL: ASSUME FAILURE of %s" % (follower_id)
+		# if len(app_ent) > 20000:
+		# 	print "FAIL: ASSUME FAILURE of %s" % (follower_id)
 		if self.sock.send(app_ent):
 			print '[%s] HANDLE FAIL: Sent append_entry rpc to %s' % (self.id, follower_id)
+
+		self.last_heard_from[follower_id] = time.time()
 
 
 	# handle receiving ok message from follower
@@ -486,6 +400,7 @@ class Replica:
 			if self.sock.send(app_ent):
 				print '[%s] SENT MORE ENTRIES FOR LOG REPLICATION TO %s' % (self.id, follower_id)
 
+		self.last_heard_from[follower_id] = time.time()
 		# check for quorum of new entries
 		self.update_commit_idx()
 
@@ -509,7 +424,7 @@ class Replica:
 		temp_commit_idx = self.commit_idx
 		# new log entry has been committed
 		if highest_quorum_idx > temp_commit_idx:
-			print 'commit_idx=%s, highest_quorum_idx=%s, so now range(commitidx+1=%s, hqi+1=%s)' % (self.commit_idx, highest_quorum_idx, self.commit_idx+1, highest_quorum_idx+1)
+			print 'commit_idx=%s, highest_quorum_idx=%s' % (self.commit_idx, highest_quorum_idx)
 			print 'next_idx=%s, match_idx= %s' % (self.next_idx, self.match_idx)
 			#print 'LEADER LOG: %s' % self.log
 			for ii in range(temp_commit_idx+1, highest_quorum_idx+1):

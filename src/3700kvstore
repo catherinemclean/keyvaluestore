@@ -25,6 +25,7 @@ while True:
 		if len(msg_raw) == 0: continue
 		msg = json.loads(msg_raw)
 		msg_type = msg['type']
+		term = msg['term']
 
 		if rep.current_state == LEADER:
 			if msg_type in [GET, PUT]:
@@ -36,20 +37,24 @@ while True:
 			elif msg_type == FAIL:
 				rep.handle_fail(msg)
 
-			elif msg_type == VOTE_REPLY and msg['term'] > rep.current_term:
-				rep.current_term = msg['term']
-				continue # if already leader, could just be delayed vote, so just ignore
-				#rep.become_follower()
+			# vote reply from replica with greater term ==> rightful leader just last to respond to vote request, still become follower
+			elif msg_type == VOTE_REPLY and rep.update_term(term):
+				# continue # if already leader, could just be delayed vote, so just ignore
+				rep.become_follower()
+				rep.leader_id = 'FFFF'
 
 			elif msg_type == VOTE_REQ:
-				rep.become_follower()
-				rep.handle_vote_request(msg)
-
-			elif msg_type == APPEND_ENT:
-				if (msg['term'] > rep.current_term):
+				if rep.update_term(term) and rep.check_stale_followers(): # todo: AND haven't heard from n/2 followers within election timeout
 					rep.become_follower()
-					rep.recv_append_ent(msg)
+					rep.leader_id = 'FFFF'
+					rep.handle_vote_request(msg)
+				# else: TODO update term and remain leader
 
+			# APPEND_ENT msg type and better term
+			elif msg_type == APPEND_ENT and rep.update_term(term):
+				rep.become_follower()
+				rep.recv_append_ent(msg)
+				# TODO: if not better term and leader rejects APPEND_ENT, then next heartbeat will just serve as FAIL msg? or move to leader condition in recv_append_ent and respond with fail?
 
 		else: # either follower or candidate
 			# Redirect get() and put() from clients to leader
@@ -63,13 +68,12 @@ while True:
 				rep.handle_vote_request(msg)
 
 			elif msg_type == VOTE_REPLY:
-				if msg['vote']:
-					if rep.current_state == CANDIDATE:
+				if msg['vote'] and rep.current_state == CANDIDATE:
 						rep.tally_votes()
+				elif rep.update_term(term):
+					rep.become_follower()
 				else:
-					if msg['term'] > rep.current_term:
-						rep.current_term = msg['term']
-						#rep.become_follower()
+					continue
 
 
 	clock = time.time()
