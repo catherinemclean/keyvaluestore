@@ -190,16 +190,13 @@ class Replica:
 			return
 
 
-		if self.current_state == LEADER:
+		if self.current_state != FOLLOWER:
 			self.update_term(term)
 			self.become_follower()
 			self.leader_id = msg['leader']
 
-		if self.current_state == CANDIDATE:
-			self.update_term(term)
-			self.become_follower()
-
-
+		
+		
 		# received heartbeat
 		if msg['entries'] == []:
 			self.update_term(term)
@@ -215,13 +212,13 @@ class Replica:
 				self.leader_id = msg['leader']
 				# reset timeout
 				self.last = time.time()
-					
+				'''	
 				# redirect any queued messages received during election
 				if self.msgs_to_redirect != []:
 					for m in self.msgs_to_redirect:
 						self.redirect_client(m)
 					self.msgs_to_redirect = []
-
+				'''
 
 			# regular heartbeat from established leader
 			else:
@@ -273,6 +270,12 @@ class Replica:
 			# reset timeout clock
 			self.last = time.time()
 
+		# redirect any queued messages received during election
+                if self.msgs_to_redirect != []:
+		        for m in self.msgs_to_redirect:
+   	   	             self.redirect_client(m)
+                        self.msgs_to_redirect = []
+		
 		# apply commands to state machine if necessary
 		if reply_type == OK and msg['leader_commit'] > self.commit_idx:
 			self.apply_commited(msg['leader_commit'])
