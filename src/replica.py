@@ -5,7 +5,7 @@ import json
 import random
 import socket
 import time
-#from statistics import median, median_low
+from sets import Set
 from numpy import median
 from constants import *
 
@@ -20,7 +20,7 @@ class Replica:
 		self.last_applied = 0   # index of highest log entry applied to state machine (initialized to 0, increases monotonically)
 		self.state_machine = {} # actual key-value store
 		self.votes = 0          # number of votes received if candidate
-		self.msgs_to_redirect = []
+		self.msgs_to_redirect = Set([])
 
 		# Setup socket
 		self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -28,7 +28,7 @@ class Replica:
 
 		# Persistent state on all servers (Updated on stable storage before responding to RPCs)
 		self.current_term = 0   # latest term server has seen (initialized to 0 on first boot, increases monotonically)
-		self.log = [(-1, {})]   # log of transactions as tuples with the term and the command (as client msg); first index is 1
+		self.log = Set([(-1, {})])   # log of transactions as tuples with the term and the command (as client msg); first index is 1
 		self.voted_for = None   # who this replica voted for in this round
 		
 		# Leader specific vars (only used if leader)
@@ -76,14 +76,12 @@ class Replica:
 			self.match_idx[rid] = 0  # initialized to 0
 			self.last_heard_from[rid] = 0 #time.time()
 
-		if self.msgs_to_redirect != []:
-			for m in set(self.msgs_to_redirect):
-				# TODO: check for duplicates?
-				self.send_append_ent(m)
-			self.msgs_to_redirect = []
-
 		# send heartbeat
 		self.send_append_ent()
+
+		while len(self.msgs_to_redirect) > 0:
+			self.log.add(self.msgs_to_redirect.pop(0))
+
 
 	# Change state to follower if candidate and lost election or if leader and received vote request
 	# Assumes term has already been updated (and that is what triggered method call)
@@ -193,12 +191,10 @@ class Replica:
 
 		self.leader_id = msg['leader']
 		# redirect any queued messages received during election
-		if self.msgs_to_redirect != []:
+		while len(self.msgs_to_redirect) > 0:
 			print '[%s] REDIRECTING1 msgs_to_redirect (%s) to leader %s' % (self.id, len(self.msgs_to_redirect), self.leader_id)
-			for m in self.msgs_to_redirect:
-				self.redirect_client(m)
-			self.msgs_to_redirect = []
-		
+			self.redirect_client(self.msgs_to_redirect.pop(0))
+
 		# received heartbeat
 		if msg['entries'] == []:
 			self.update_term(term)
@@ -214,13 +210,6 @@ class Replica:
 				self.leader_id = msg['leader']
 				# reset timeout
 				self.last = time.time()
-				'''	
-				# redirect any queued messages received during election
-				if self.msgs_to_redirect != []:
-					for m in self.msgs_to_redirect:
-						self.redirect_client(m)
-					self.msgs_to_redirect = []
-				'''
 
 			# regular heartbeat from established leader
 			else:
@@ -258,9 +247,7 @@ class Replica:
 				self.log = self.log[:prev_log_idx + 1]
 				middle = len(self.log)
 				for entry in msg['entries']:
-					e = tuple(entry)
-					if e not in self.log:
-						self.log.append(tuple(e))
+					self.log.add(tuple(entry))
 				reply_type = OK
 				
 				if len(self.log) > msg['log']:
@@ -275,13 +262,11 @@ class Replica:
 			self.last = time.time()
 
 		# redirect any queued messages received during election
-		if self.msgs_to_redirect != []:
+		while len(self.msgs_to_redirect) > 0:
 			assert (self.leader_id != 'FFFF')
 			print '[%s] REDIRECTING2 msgs_to_redirect (%s) to leader %s' % (self.id, len(self.msgs_to_redirect), self.leader_id)
-			for m in self.msgs_to_redirect:
-				self.redirect_client(m)
-			self.msgs_to_redirect = []
-		
+			self.redirect_client(self.msgs_to_redirect.pop(0))
+
 		# apply commands to state machine if necessary
 		if reply_type == OK and msg['leader_commit'] > self.commit_idx:
 			self.apply_committed(msg['leader_commit'])
@@ -291,7 +276,7 @@ class Replica:
 	# respond to client with redirect message if not leader
 	def redirect_client(self, msg):
 		if self.leader_id == 'FFFF':
-			self.msgs_to_redirect.append(msg)
+			self.msgs_to_redirect.add(msg)
 			return
 		
 		if self.leader_id == self.id:
@@ -328,7 +313,7 @@ class Replica:
 		# new client request
 		if msg != None and msg not in [entry[1] for entry in self.log]:
 			# add client command to log if not duplicate request
-			self.log.append((self.current_term, msg))
+			self.log.add((self.current_term, msg))
 
 			# send appropriate entries to all followers
 			for rid in self.replica_ids:
@@ -381,7 +366,7 @@ class Replica:
 		raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
 				   'term': self.current_term, 'prev_log_idx': follower_next - 1,
 				   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
-				   'entries': entries}
+				   'entries': entries, 'log': len(self.log)}
 		app_ent = json.dumps(raw_msg)
 		# if len(app_ent) > 20000:
 		# 	print "FAIL: ASSUME FAILURE of %s" % (follower_id)
@@ -410,7 +395,7 @@ class Replica:
 			raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
 					   'term': self.current_term, 'prev_log_idx': follower_next - 1,
 					   'prev_log_term': self.log[follower_next - 1][0], 'leader_commit': self.commit_idx,
-					   'entries': entries}
+					   'entries': entries, 'log': len(self.log)}
 			app_ent = json.dumps(raw_msg)
 			if self.sock.send(app_ent):
 				print '[%s] SENT MORE ENTRIES FOR LOG REPLICATION TO %s' % (self.id, follower_id)
