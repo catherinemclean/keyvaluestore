@@ -130,7 +130,7 @@ class Replica:
 		if self.current_state == LEADER or term < self.current_term:
 			# set leader_id to FFFF if not the leader
 			self.leader_id = self.leader_id if self.current_state == LEADER else 'FFFF'
-			raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': leader, 'type': FAIL,
+			raw_msg = {'src': self.id, 'dst': msg['src'], 'leader': self.leader_id, 'type': FAIL,
 					   'term': self.current_term}
 			reply = json.dumps(raw_msg)
 			if self.sock.send(reply):
@@ -190,22 +190,29 @@ class Replica:
 			       'type': FAIL, 'term': self.current_term, 'last_log_idx': len(self.log)-1}
 			reply = json.dumps(raw)
 			if self.sock.send(reply):
-				print '[%s] Rejected AppendEntryRPC from %s\n\n' % (self.id, msg['src'])
+				print '[%s] Rejected AppendEntryRPC from %s' % (self.id, msg['src'])
 
 			return
 
 		# update term
 		self.current_term = term
+		self.leader_id = msg['leader']
+
+                # redirect any queued messages received during election
+                if self.msgs_to_redirect != []:
+			for m in self.msgs_to_redirect:
+				self.redirect_client(m)
+                        self.msgs_to_redirect = []
 
 		# heartbeat
 		if msg['entries'] == []:
-
+			'''
 			# redirect any queued messages received during election
 			if self.msgs_to_redirect != []:
 				for m in self.msgs_to_redirect:
 					self.redirect_client(m)
 				self.msgs_to_redirect = []
-
+			'''
 			# received initial heartbeat from new leader
 			if self.voted_for != None:
 				print '[%s] New leader: %s' % (self.id, msg['leader'])

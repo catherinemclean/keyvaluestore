@@ -27,22 +27,17 @@ while True:
         msg_type = msg['type']
         term = msg.get('term', None)
 
-	# leader specific msg handling
-	if rep.current_state == LEADER:
-		if msg_type in [GET, PUT]:
-			print('leader get, put')
-			rep.send_append_ent(msg)
+        # leader specific msg handling
+        if rep.current_state == LEADER:
+                if msg_type in [GET, PUT]:
+                        rep.send_append_ent(msg)
 
-		elif msg_type == OK:
-			print('leader ok')
-			rep.handle_ok(msg)
+                elif msg_type == OK:
+                        rep.handle_ok(msg)
 
-		elif msg_type == FAIL:
-			print('leader fail')
-			rep.handle_fail(msg)
-
+                elif msg_type == FAIL:
+                        rep.handle_fail(msg)
 		elif msg_type == VOTE_REQ:
-			print('leader vote req')
 			# easy partition (leader still in majority group)
 			# after partition removed, vote request will have higher term but shouldn't be leader
 			if (term <= rep.current_term or
@@ -53,155 +48,36 @@ while True:
 
 			else:
 				rep.become_follower(term)
+				rep.leader_id = 'FFFF'
 				rep.handle_vote_request(msg)
-
-		# if already leader, could just be delayed vote, so just ignore
-		# VOTE_REPLY msgs only grant vote or reject vote due to how up to date log is
-		elif msg_type == VOTE_REPLY:
-			print'leader vote reply'
-			continue
 
 		# hard partition (leader partitioned off, so 2 leaders, old and new, when partition removed)
 		elif msg_type == APPEND_ENT and term > rep.current_term:
-			print('leader app ent')
 			# if old leader, become follower of new leader, then handle APPEND_ENT
 			rep.become_follower(term)
 			rep.recv_append_ent(msg)
-
-	# candidate or follower
-	else:
+	
+	else:  # either follower or candidate
+		# Redirect get() and put() from clients to leader
 		if msg_type in [GET, PUT]:
-			print('1')
-			# TODO: fix redirecting...
 			rep.redirect_client(msg)
 
-		elif msg_type == VOTE_REQ:
-			print 'candidate and follower same handle vote req'
-			rep.handle_vote_request(msg)
-
-		elif type == APPEND_ENT:
+		elif msg_type == APPEND_ENT:
 			if rep.current_state == CANDIDATE:
 				# another replica won election
 				rep.become_follower(term)
-
+			
 			rep.recv_append_ent(msg)
 
-		elif type == FAIL and rep.current_state == CANDIDATE:
-			print('cand fail')
+		elif msg_type == VOTE_REQ:
+			rep.handle_vote_request(msg)
+
+		elif msg_type == FAIL and rep.current_state == CANDIDATE:
 			# vote request was rejected because candidate has lower term
 			rep.become_follower(term)
 
-		elif type == VOTE_REPLY and rep.current_state == CANDIDATE and msg['vote']:
-			print '[%s] tally votes' % rep.id
+		elif msg_type == VOTE_REPLY and rep.current_state == CANDIDATE and msg['vote']:
 			rep.tally_votes()
-
-		elif type == OK and rep.current_state == CANDIDATE:
-			print '[%s] candidate received OK msg?' % rep.id
-
-
-	'''
-        # leader specific msg handling
-        if rep.current_state == LEADER:
-            if msg_type in [GET, PUT]:
-                print('leader get, put')
-                rep.send_append_ent(msg)
-
-            elif msg_type == OK:
-                print('leader ok')
-                rep.handle_ok(msg)
-
-            elif msg_type == FAIL:
-                print('leader fail')
-                rep.handle_fail(msg)
-
-            elif msg_type == VOTE_REQ:
-                print('leader vote req')
-                # easy partition (leader still in majority group)
-                # after partition removed, vote request will have higher term but shouldn't be leader
-                if (term <= rep.current_term or
-                        (term > rep.current_term and not rep.check_stale_followers())):
-                    # update leader term
-                    rep.current_term = term
-                    # TODO: in handle_vote_request, add if LEADER condition
-                    # if leader is handling a vote request, only possible response is to send a fail
-                    rep.handle_vote_request(msg)
-
-                else:
-                    rep.become_follower(term)
-                    rep.handle_vote_request(msg)
-
-            # if already leader, could just be delayed vote, so just ignore
-            # VOTE_REPLY msgs only grant vote or reject vote due to how up to date log is
-            elif msg_type == VOTE_REPLY:
-                print 'leader vote reply'
-                continue
-
-            # hard partition (leader partitioned off, so 2 leaders, old and new, when partition removed)
-            elif msg_type == APPEND_ENT and term > rep.current_term:
-                print('leader app ent')
-                # if old leader, become follower of new leader, then handle APPEND_ENT
-                rep.become_follower(term)
-                rep.recv_append_ent(msg)
-
-        # candidates and followers handle GET, PUT, and VOTE_REQ msgs same way
-        elif msg_type in [GET, PUT]:
-            print('1')
-            # TODO: fix redirecting...
-            rep.redirect_client(msg)
-
-        elif msg_type == VOTE_REQ:
-            print 'candidate and follower same handle vote req'
-            rep.handle_vote_request(msg)
-
-        # candidate specific msg handling
-        elif rep.current_state == CANDIDATE:
-            if type == FAIL:
-                print('cand fail')
-                # vote request was rejected because candidate has lower term
-                rep.become_follower(term)
-
-            if type == APPEND_ENT:
-                print('cand app ent')
-                # another replica won election
-                rep.become_follower(term)
-                rep.recv_append_ent(msg)
-
-            elif type == VOTE_REPLY and msg['vote']:
-                print '[%s] tally votes' % rep.id
-                rep.tally_votes()
-
-            # candidates should probably never receive OKs...?
-            if type == OK:
-                print '****CANDIDATE %s RECEIVED MSG TYPE OK????' % rep.id
-
-            # if msg_type in [GET, PUT]:
-            #     print('1')
-            #     # TODO: fix redirecting...
-            #     rep.redirect_client(msg)
-            #
-            # if msg_type == VOTE_REQ:
-            #     print 'candidate same handle vote req'
-            #     rep.handle_vote_request(msg)
-
-
-        else:
-            # if msg_type in [GET, PUT]:
-            #     print('follower get put')
-            #     # TODO: fix redirecting...
-            #     rep.redirect_client(msg)
-            #
-            # if msg_type == VOTE_REQ:
-            #     print 'follower same handle vote req'
-            #     rep.handle_vote_request(msg)
-            # follower specific msg handling
-            if msg_type == APPEND_ENT:
-                print('follower app ent')
-                rep.recv_append_ent(msg)
-
-        # elif msg_type in [FAIL, OK, VOTE_REPLY]:
-        #     # delayed msg and replica most likely just changed states so ignore?
-        #     continue
-	'''
 
     clock = time.time()
     if rep.current_state == LEADER:
