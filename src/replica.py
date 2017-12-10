@@ -252,15 +252,17 @@ class Replica:
 			# logs match
 			else:
 				# only keep entries up to what is matched with leader
+				before = len(self.log)
 				self.log = self.log[:prev_log_idx + 1]
+				middle = len(self.log)
 				for entry in msg['entries']:
-					# e = tuple(entry)
-					# if e not in self.log:
-					self.log.append(tuple(entry))
-
+					e = tuple(entry)
+					if e not in self.log:
+						self.log.append(tuple(e))
 				reply_type = OK
-
-
+				
+				if len(self.log) > msg['log']:
+					print '[%s] HAS LONGER LOG THAN LEADER %s --- was %s, removed entries to %s, after append entries %s' % (self.id, self.leader_id, before, middle, len(self.log))
 			# send response to leader
 			raw = {'src': self.id, 'dst': self.leader_id, 'leader': self.leader_id,
 			       'type': reply_type, 'term': self.current_term, 'last_log_idx': len(self.log) - 1}
@@ -335,7 +337,7 @@ class Replica:
 				raw_msg = {'src': self.id, 'dst': rid, 'leader': self.leader_id, 'type': APPEND_ENT,
 						   'term': self.current_term, 'prev_log_idx': prev_log_idx,
 						   'prev_log_term': prev_log_term, 'leader_commit': self.commit_idx,
-						   'entries': entries}
+						   'entries': entries, 'log': len(self.log)}
 				app_ent = json.dumps(raw_msg)
 				self.sock.send(app_ent)
 
@@ -368,7 +370,7 @@ class Replica:
 		self.next_idx[follower_id] = min(self.next_idx[follower_id]-1, msg['last_log_idx']+1)
 		follower_next = self.next_idx[follower_id]
 		# send max of 25 entries at once
-		num_entries = min(len(self.log), follower_next+26)
+		num_entries = min(len(self.log), follower_next+51)
 
 		entries = self.log[follower_next:num_entries]
 		raw_msg = {'src': self.id, 'dst': follower_id, 'leader': self.leader_id, 'type': APPEND_ENT,
@@ -394,7 +396,7 @@ class Replica:
 		if msg['last_log_idx'] >= len(self.log):
 			print 'NEVER: FOLLOWERS LOG LONGER THAN LEADER LOG (lastlogidx=%s >= %s)' % (msg['last_log_idx'], len(self.log))
 
-		if len(self.log) - self.match_idx[follower_id] > 25:
+		if len(self.log) - self.match_idx[follower_id] > 50:
 			# log replication (replica many log entries behind leader)
 			follower_next = self.next_idx[follower_id]
 			num_entries = min(len(self.log), follower_next + 51)
