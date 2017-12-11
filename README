@@ -29,6 +29,9 @@
 # included in confusing language. There were many details and variables to keep track of in this assignment,
 # and it was sometimes complicated to correctly set all of them to the correct values at the correct points.
 #
+# Another problem we encountered was debugging. The issues we encountered in the code would not always manifest
+# in obvious ways. We solved this problem by including numerous print statements for logging purposes, so we
+# could keep track of all of the details in our program.
 #
 # Overview of how we tested our code
 #
