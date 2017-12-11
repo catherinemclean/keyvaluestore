@@ -1,0 +1,39 @@
+# keyvaluestore
+#
+# Our high level approach
+#
+# We started this assignment by reading the RAFT protocol paper extensively. We made sure that we understood
+# the protocol thoroughly and what the project should look like before we began programming. We began by
+# following the steps outlined in the project description. We first responded to all client get and put
+# requests with fail messages. We then implemented the RAFT election protocol, which is how we had the
+# program choose a leader. Every time a replica saw a higher term than its current term, it would set
+# its own term as that higher term.
+#
+# We then added random timeouts to detect leader failures. This is so that replicas do not time out at the
+# same time and both become candidates. We also added redirect functionality. After this, our election 
+# algorithm seemed correct. We also implemented the heartbeats from the leader and basic get and put
+# functionality that only worked with the leader. After this, most of our simple tests would pass.
+#
+# After our elections were working, we began working on the consensus algorithm. After the leader received
+# a message, it would send it to each of the followers. If at least half of the followers received the
+# message, the leader would commit it and send the client a response. We implemented the state machine and
+# the AppendEntries messages. We then added support for retrying failed commits and some of the election
+# details and commit restrictions. After we followed the steps outlined in the assignment, we spent most
+# of our time debugging this.
+#
+# Problems
+#
+# Our main problems with this assignment were understanding some of the subtleties of the RAFT protocol.
+# For example, we did not immediately understand that a leader should time out if it did not hear from
+# more than half of the replicas. Some of the aspects of RAFT were not explicit in the paper, or were
+# included in confusing language. There were many details and variables to keep track of in this assignment,
+# and it was sometimes complicated to correctly set all of them to the correct values at the correct points.
+#
+#
+# Overview of how we tested our code
+#
+# We tested our code after each step that we completed. After every change, we wanted to ensure that we
+# were moving in the right direction and that the tests followed the expected behavior. Initially, we ran
+# only the simple-1 test that was given to us. If that test did not pass, we felt confident that the other
+# tests would not pass. Once we set the elections properly so that the simple tests were passing, we began
+# running the entire test script. 
