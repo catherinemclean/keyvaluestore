@@ -1,0 +1,90 @@
+#!/usr/bin/env python
+
+import json
+import select
+import sys
+import time
+
+from replica import Replica
+from constants import *
+
+# Your ID number
+my_id = sys.argv[1]
+
+# The ID numbers of all the other replicas
+replica_ids = sys.argv[2:]
+
+rep = Replica(my_id, replica_ids)
+
+while True:
+    ready = select.select([rep.sock], [], [], 0.1)[0]
+
+    if rep.sock in ready:
+        msg_raw = rep.sock.recv(32768)
+
+        if len(msg_raw) == 0: continue
+        msg = json.loads(msg_raw)
+        msg_type = msg['type']
+        term = msg.get('term', None)
+
+        # leader specific msg handling
+        if rep.current_state == LEADER:
+                if msg_type in [GET, PUT]:
+                        rep.send_append_ent(msg)
+
+                elif msg_type == OK:
+                        rep.handle_ok(msg)
+
+                elif msg_type == FAIL:
+                        rep.handle_fail(msg)
+		elif msg_type == VOTE_REQ:
+			# easy partition (leader still in majority group)
+			# after partition removed, vote request will have higher term but shouldn't be leader
+			if (term <= rep.current_term or
+				    (term > rep.current_term and not rep.check_stale_followers())):
+				# update leader term
+				rep.current_term = term
+				rep.handle_vote_request(msg)
+
+			else:
+				rep.become_follower(term)
+				rep.leader_id = 'FFFF'
+				rep.handle_vote_request(msg)
+
+		# hard partition (leader partitioned off, so 2 leaders, old and new, when partition removed)
+		elif msg_type == APPEND_ENT and term > rep.current_term:
+			# if old leader, become follower of new leader, then handle APPEND_ENT
+			rep.become_follower(term)
+			rep.recv_append_ent(msg)
+	
+	else:  # either follower or candidate
+		# Redirect get() and put() from clients to leader
+		if msg_type in [GET, PUT]:
+			rep.redirect_client(msg)
+
+		elif msg_type == APPEND_ENT:
+			if rep.current_state == CANDIDATE:
+				# another replica won election
+				rep.become_follower(term)
+			
+			rep.recv_append_ent(msg)
+
+		elif msg_type == VOTE_REQ:
+			rep.handle_vote_request(msg)
+
+		elif msg_type == FAIL and rep.current_state == CANDIDATE:
+			# vote request was rejected because candidate has lower term
+			rep.become_follower(term)
+
+		elif msg_type == VOTE_REPLY and rep.current_state == CANDIDATE and msg['vote']:
+			rep.tally_votes()
+
+    clock = time.time()
+    if rep.current_state == LEADER:
+        if clock - rep.append_last > .1:
+            rep.send_append_ent()
+
+    #checks if received an Append RPC message in election timeout frame
+    elif clock - rep.last > rep.election_timeout:
+        rep.become_candidate()
+
